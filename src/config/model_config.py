@@ -1,0 +1,36 @@
+class ALSConfig:
+    
+    RANK = 50
+    MAX_ITER = 20
+    REG_PARAM = 0.1
+    ALPHA = 1.0
+    IMPLICIT_PREFS = False
+    COLD_START_STRATEGY = "drop"
+    NUM_USER_BLOCKS = 10
+    NUM_ITEM_BLOCKS = 10
+    CHECKPOINT_INTERVAL = 10
+
+
+class LightGBMConfig:
+    
+    NUM_LEAVES = 31
+    MAX_DEPTH = -1
+    LEARNING_RATE = 0.05
+    NUM_ITERATIONS = 100
+    OBJECTIVE = "regression"
+    METRIC = "rmse"
+    NUM_THREADS = 4
+    FEATURE_FRACTION = 0.8
+    BAGGING_FRACTION = 0.8
+    BAGGING_FREQ = 5
+    MIN_DATA_IN_LEAF = 20
+
+
+class DataConfig:
+    
+    TRAIN_RATIO = 0.8
+    VALIDATION_RATIO = 0.1
+    TEST_RATIO = 0.1
+    RANDOM_SEED = 42
+    MIN_RATINGS_PER_USER = 5
+    MIN_RATINGS_PER_BOOK = 5

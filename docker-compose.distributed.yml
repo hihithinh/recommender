@@ -1,0 +1,109 @@
+version: '3.8'
+
+# Docker Compose for Multi-Host Distributed Deployment
+# This configuration is for deploying across multiple physical machines
+# 
+# Setup Instructions:
+# 1. On each machine, set the DOCKER_HOST_IP environment variable to the machine's IP
+# 2. Deploy spark-master on one machine
+# 3. Deploy spark-worker services on worker machines
+# 4. Update SPARK_MASTER_HOST to point to the master machine's IP
+#
+# Example deployment:
+# Machine 1 (Master): docker-compose -f docker-compose.distributed.yml up spark-master jupyter
+# Machine 2 (Worker): SPARK_MASTER_HOST=<master-ip> docker-compose -f docker-compose.distributed.yml up spark-worker
+# Machine 3 (Worker): SPARK_MASTER_HOST=<master-ip> docker-compose -f docker-compose.distributed.yml up spark-worker
+
+services:
+  spark-master:
+    build:
+      context: ./docker/spark-master
+      dockerfile: Dockerfile
+    container_name: spark-master
+    hostname: spark-master
+    environment:
+      - SPARK_MODE=master
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_MASTER_HOST=0.0.0.0
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    ports:
+      - "8080:8080"  # Spark Master Web UI
+      - "7077:7077"  # Spark Master Port
+      - "6066:6066"  # Spark Master REST API
+    volumes:
+      - /mnt/shared/data:/opt/spark-data
+      - /mnt/shared/raw_data:/opt/raw-data
+      - ./src:/opt/spark-apps
+      - ./scripts:/opt/scripts
+      - /mnt/shared/logs/spark:/opt/spark/logs
+    networks:
+      - spark-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  spark-worker:
+    build:
+      context: ./docker/spark-worker
+      dockerfile: Dockerfile
+    hostname: spark-worker-${HOSTNAME:-worker}
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://${SPARK_MASTER_HOST:-spark-master}:7077
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-4}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-8g}
+      - SPARK_WORKER_WEBUI_PORT=8081
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_LOCAL_IP=${DOCKER_HOST_IP:-0.0.0.0}
+    ports:
+      - "8081:8081"  # Worker Web UI
+      - "7000-7100:7000-7100"  # Worker communication ports
+    volumes:
+      - /mnt/shared/data:/opt/spark-data
+      - /mnt/shared/raw_data:/opt/raw-data
+      - ./src:/opt/spark-apps
+      - ./scripts:/opt/scripts
+      - /mnt/shared/logs/spark:/opt/spark/logs
+    networks:
+      - spark-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "spark-master:${SPARK_MASTER_HOST:-172.17.0.1}"
+
+  jupyter:
+    build:
+      context: ./docker/jupyter
+      dockerfile: Dockerfile
+    container_name: jupyter-notebook
+    hostname: jupyter
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - SPARK_MASTER_URL=spark://${SPARK_MASTER_HOST:-spark-master}:7077
+    ports:
+      - "8888:8888"  # Jupyter Notebook
+      - "4040:4040"  # Spark Application UI
+    volumes:
+      - /mnt/shared/data:/opt/spark-data
+      - /mnt/shared/raw_data:/opt/raw-data
+      - ./src:/opt/spark-apps
+      - ./scripts:/opt/scripts
+      - ./notebooks:/opt/notebooks
+      - /mnt/shared/logs:/opt/logs
+    networks:
+      - spark-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "spark-master:${SPARK_MASTER_HOST:-172.17.0.1}"
+    command: >
+      bash -c "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser 
+      --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+
+networks:
+  spark-network:
+    driver: bridge
