@@ -68,19 +68,25 @@ docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper 
 **Trên máy chạy Worker (bất kỳ máy nào):**
 ```bash
 # Worker 1
-docker compose -f docker-compose.cluster.yml up -d spark-worker
+docker compose -f docker-compose.cluster.yml up -d spark-worker-1
 
 # Worker 2 trên cùng máy (optional)
-WORKER_ID=2 docker compose -f docker-compose.cluster.yml up -d spark-worker
+docker compose -f docker-compose.cluster.yml up -d spark-worker-2
 
 # Worker 3 trên cùng máy (optional)
-WORKER_ID=3 docker compose -f docker-compose.cluster.yml up -d spark-worker
+docker compose -f docker-compose.cluster.yml up -d spark-worker-3
+
+# Hoặc start nhiều workers cùng lúc
+docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2 spark-worker-3
 ```
 
 **Máy Mac vừa Master vừa Worker:**
 ```bash
-# Start tất cả
-docker compose -f docker-compose.cluster.yml up -d
+# Start tất cả (master + 1 worker)
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 kafka zookeeper jupyter-notebook
+
+# Hoặc thêm nhiều workers
+docker compose -f docker-compose.cluster.yml up -d spark-worker-2 spark-worker-3
 ```
 
 ### 5. Verify Cluster
@@ -177,22 +183,21 @@ docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper 
 
 **Windows:**
 ```bash
-# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1, WORKER_ID=1
-docker compose -f docker-compose.cluster.yml up -d spark-worker
+# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1
+docker compose -f docker-compose.cluster.yml up -d spark-worker-1
 ```
 
 ### Scenario 2: Mac vừa Master vừa Worker + Windows 2 Workers
 **Mac:**
 ```bash
-# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1, WORKER_ID=1
-docker compose -f docker-compose.cluster.yml up -d
+# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 kafka zookeeper jupyter-notebook
 ```
 
 **Windows:**
 ```bash
 # .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1
-WORKER_ID=2 docker compose -f docker-compose.cluster.yml up -d spark-worker
-WORKER_ID=3 docker compose -f docker-compose.cluster.yml up -d spark-worker
+docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2
 ```
 
 ## Tài liệu

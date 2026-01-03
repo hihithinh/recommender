@@ -39,24 +39,22 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # SPARK WORKER
+  # SPARK WORKERS
   # ============================================
-  # Để chạy nhiều workers trên 1 máy:
-  # docker compose -f docker-compose.cluster.yml up -d spark-worker
-  # WORKER_ID=2 docker compose -f docker-compose.cluster.yml up -d spark-worker-2
+  # Chạy nhiều workers trên 1 máy bằng cách start từng service riêng
   
-  spark-worker:
+  spark-worker-1:
     build:
       context: ./docker/spark-worker
       dockerfile: Dockerfile
-    container_name: spark-worker-${WORKER_ID:-1}
-    hostname: spark-worker-${WORKER_ID:-1}
+    container_name: spark-worker-1
+    hostname: spark-worker-1
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
       - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-4}
       - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-8g}
-      - SPARK_WORKER_WEBUI_PORT=808${WORKER_ID:-1}
+      - SPARK_WORKER_WEBUI_PORT=8081
       - SPARK_RPC_AUTHENTICATION_ENABLED=no
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
@@ -65,13 +63,78 @@ services:
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
     ports:
-      - "808${WORKER_ID:-1}:808${WORKER_ID:-1}"  # Worker Web UI
-      - "7000-7100:7000-7100"  # Worker communication ports
+      - "8081:8081"
     volumes:
       - ./src:/opt/spark-apps
       - ./scripts:/opt/scripts
-      - worker-${WORKER_ID:-1}-cache:/opt/spark-data
-      - worker-${WORKER_ID:-1}-logs:/opt/spark/logs
+      - worker-1-cache:/opt/spark-data
+      - worker-1-logs:/opt/spark/logs
+    networks:
+      - spark-network
+    extra_hosts:
+      - "spark-master:${MASTER_TAILSCALE_IP}"
+      - "kafka:${MASTER_TAILSCALE_IP}"
+    restart: unless-stopped
+
+  spark-worker-2:
+    build:
+      context: ./docker/spark-worker
+      dockerfile: Dockerfile
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-4}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-8g}
+      - SPARK_WORKER_WEBUI_PORT=8082
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_LOCAL_IP=${THIS_MACHINE_IP:-0.0.0.0}
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./src:/opt/spark-apps
+      - ./scripts:/opt/scripts
+      - worker-2-cache:/opt/spark-data
+      - worker-2-logs:/opt/spark/logs
+    networks:
+      - spark-network
+    extra_hosts:
+      - "spark-master:${MASTER_TAILSCALE_IP}"
+      - "kafka:${MASTER_TAILSCALE_IP}"
+    restart: unless-stopped
+
+  spark-worker-3:
+    build:
+      context: ./docker/spark-worker
+      dockerfile: Dockerfile
+    container_name: spark-worker-3
+    hostname: spark-worker-3
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
+      - SPARK_WORKER_CORES=${SPARK_WORKER_CORES:-4}
+      - SPARK_WORKER_MEMORY=${SPARK_WORKER_MEMORY:-8g}
+      - SPARK_WORKER_WEBUI_PORT=8083
+      - SPARK_RPC_AUTHENTICATION_ENABLED=no
+      - SPARK_RPC_ENCRYPTION_ENABLED=no
+      - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
+      - SPARK_SSL_ENABLED=no
+      - SPARK_LOCAL_IP=${THIS_MACHINE_IP:-0.0.0.0}
+      - PYSPARK_PYTHON=python3
+      - PYSPARK_DRIVER_PYTHON=python3
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./src:/opt/spark-apps
+      - ./scripts:/opt/scripts
+      - worker-3-cache:/opt/spark-data
+      - worker-3-logs:/opt/spark/logs
     networks:
       - spark-network
     extra_hosts:
@@ -99,7 +162,7 @@ services:
     restart: unless-stopped
 
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:7.4.0
     container_name: kafka
     hostname: kafka
     depends_on:
