@@ -19,6 +19,7 @@ class SparkConfig:
         
         # Get driver host for distributed setup
         driver_host = os.getenv("SPARK_DRIVER_HOST", "spark-master")
+        master_ip = os.getenv("MASTER_TAILSCALE_IP", "namenode")
         
         spark = (SparkSession.builder
                 .appName(app_name)
@@ -30,7 +31,7 @@ class SparkConfig:
                 .config("spark.driver.bindAddress", "0.0.0.0")
                 .config("spark.driver.port", "35000")
                 .config("spark.driver.blockManager.port", "35001")
-                .config("spark.hadoop.fs.defaultFS", "hdfs://namenode:9000")
+                .config("spark.hadoop.fs.defaultFS", f"hdfs://{master_ip}:9000")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
@@ -47,9 +48,10 @@ class SparkConfig:
     
     @staticmethod
     def get_data_paths():
+        master_ip = os.getenv("MASTER_TAILSCALE_IP", "namenode")
         return {
-            "raw_data": "hdfs://namenode:9000/data/raw",
-            "processed_data": "hdfs://namenode:9000/data/processed",
-            "embeddings": "hdfs://namenode:9000/data/embeddings",
-            "models": "hdfs://namenode:9000/data/models"
+            "raw_data": f"hdfs://{master_ip}:9000/data/raw",
+            "processed_data": f"hdfs://{master_ip}:9000/data/processed",
+            "embeddings": f"hdfs://{master_ip}:9000/data/embeddings",
+            "models": f"hdfs://{master_ip}:9000/data/models"
         }
