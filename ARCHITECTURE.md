@@ -1,362 +1,529 @@
-# Kiến trúc Phân tán - Data Flow
+# Book Recommender System - Architecture
 
-## Vai trò của các thành phần
+## Tổng quan hệ thống
 
-### 1. Spark Master
-- **KHÔNG lưu trữ dữ liệu**
-- Chỉ điều phối và quản lý cluster
-- Phân bổ tasks cho workers
-- Theo dõi trạng thái workers
-- Quản lý resource allocation
-
-### 2. Spark Workers
-- **KHÔNG lấy dữ liệu từ Master**
-- Đọc/ghi dữ liệu **trực tiếp từ Shared Storage**
-- Thực thi tasks được phân bổ
-- Xử lý dữ liệu phân tán
-- Giao tiếp với nhau khi cần shuffle data
-
-### 3. Shared Storage (NFS/HDFS)
-- **Nguồn dữ liệu chung** cho tất cả nodes
-- Tất cả workers đọc/ghi trực tiếp
-- Master cũng đọc/ghi từ đây (nếu cần)
-
-## Data Flow Architecture
+Hệ thống gợi ý sách phân tán sử dụng Apache Spark, Kafka, và Machine Learning (ALS + LightGBM).
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Shared Storage (NFS/HDFS)                │
-│              /mnt/shared/{data,raw_data,logs}               │
-│                                                             │
-│  - BX-Book-Ratings.csv                                      │
-│  - ratings.parquet                                          │
-│  - embeddings.parquet                                       │
-│  - models/                                                  │
-└─────────────────────────────────────────────────────────────┘
-         ▲                    ▲                    ▲
-         │                    │                    │
-    READ/WRITE           READ/WRITE           READ/WRITE
-         │                    │                    │
-         │                    │                    │
-┌────────┴────────┐   ┌───────┴────────┐   ┌──────┴─────────┐
-│  Master Node    │   │  Worker Node 1 │   │  Worker Node 2 │
-│ 100.101.102.103 │   │ 100.101.102.104│   │ 100.101.102.105│
-│                 │   │                │   │                │
-│ Spark Master    │   │ Spark Worker   │   │ Spark Worker   │
-│ (Coordinator)   │   │ (Executor)     │   │ (Executor)     │
-│                 │   │                │   │                │
-│ - Schedule jobs │   │ - Read data    │   │ - Read data    │
-│ - Assign tasks  │   │ - Process      │   │ - Process      │
-│ - Monitor       │   │ - Write results│   │ - Write results│
-└─────────────────┘   └────────────────┘   └────────────────┘
-         │                    ▲                    ▲
-         │                    │                    │
-         └────────────────────┴────────────────────┘
-              Task Assignment & Coordination
+┌─────────────────────────────────────────────────────────────────┐
+│                     DISTRIBUTED CLUSTER                          │
+│                                                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
+│  │   Machine 1  │  │   Machine 2  │  │   Machine 3  │          │
+│  │              │  │              │  │              │          │
+│  │ Spark Master │  │ Spark Worker │  │ Spark Worker │          │
+│  │ Kafka        │  │ Spark Worker │  │ Spark Worker │          │
+│  │ Jupyter      │  │              │  │              │          │
+│  │ API Server   │  │              │  │              │          │
+│  └──────────────┘  └──────────────┘  └──────────────┘          │
+│         │                  │                  │                  │
+│         └──────────────────┴──────────────────┘                  │
+│                  Tailscale VPN Network                           │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## Luồng xử lý dữ liệu chi tiết
+### Đặc điểm kiến trúc
 
-### Ví dụ: Đọc file CSV và xử lý
+- **Flexible Deployment**: Mỗi máy có thể chạy Master, Worker, hoặc cả hai
+- **Scalable**: Thêm workers để tăng processing power
+- **Secure**: Kết nối qua Tailscale VPN
+- **Cross-platform**: Mac, Windows, Linux
+
+## Data Pipeline
+
+```
+Raw Data (CSV) → Preprocessing → Parquet (Data Lake)
+                                       ↓
+                    ┌──────────────────┴──────────────────┐
+                    ↓                                      ↓
+            Training Pipeline                     Serving Pipeline
+                    ↓                                      ↓
+            ALS + LightGBM Models                  API Server
+                    ↓                                      ↓
+            Model Storage                          Recommendations
+```
+
+---
+
+## TRAINING PIPELINE
+
+### 1. Data Ingestion
+
+**Kafka Streaming** (Real-time)
+- Topics: `book-ratings`, `user-events`
+- Format: JSON messages
+- Location: `src/streaming/` (nếu có)
+
+**Batch Upload** (Historical data)
+- Raw CSV files: `./raw_data/`
+  - `BX-Book-Ratings.csv`
+  - `BX-Users.csv`
+  - `BX-Books.csv`
+
+### 2. Data Processing
+
+**Module**: `src/data_processing/`
+
+**Components**:
+- `data_loader.py`: Load raw CSV files
+- `data_cleaner.py`: Clean và validate data
+- `feature_engineering.py`: Tạo features cho models
+
+**Output**: 
+- `./data/processed/ratings.parquet`
+- `./data/processed/users.parquet`
+- `./data/processed/books.parquet`
+
+**Paths** (trong Docker):
+```python
+# src/config/spark_config.py
+{
+    "raw_data": "/opt/raw-data",
+    "processed_data": "/opt/spark-data/processed",
+    "embeddings": "/opt/spark-data/embeddings",
+    "models": "/opt/spark-data/models"
+}
+```
+
+### 3. Model Training
+
+#### 3.1 ALS Model (Collaborative Filtering)
+
+**File**: `src/training/train_als.py`
+
+**Algorithm**: Spark MLlib ALS (Alternating Least Squares)
+
+**Input**: 
+- Processed ratings: `user_index`, `item_index`, `rating`
+
+**Hyperparameters** (`src/config/model_config.py`):
+```python
+class ALSConfig:
+    RANK = 50                    # Latent factors
+    MAX_ITER = 20                # Training iterations
+    REG_PARAM = 0.1              # Regularization
+    ALPHA = 1.0                  # Confidence weight
+    IMPLICIT_PREFS = False       # Explicit ratings
+    COLD_START_STRATEGY = "drop"
+    NUM_USER_BLOCKS = 10
+    NUM_ITEM_BLOCKS = 10
+```
+
+**Output**:
+- Model: `./data/models/als_model/`
+- User embeddings: `./data/embeddings/als_user_embeddings.parquet`
+- Item embeddings: `./data/embeddings/als_item_embeddings.parquet`
+
+**Evaluation Metrics**:
+- RMSE (Root Mean Square Error)
+- MAE (Mean Absolute Error)
+
+**Training Command**:
+```bash
+docker exec spark-master spark-submit \
+  --master spark://<MASTER_IP>:7077 \
+  /opt/spark-apps/training/train_als.py
+```
+
+#### 3.2 LightGBM Model (Gradient Boosting)
+
+**File**: `src/training/train_lightgbm.py`
+
+**Algorithm**: LightGBM via SynapseML
+
+**Input**:
+- ALS embeddings (user + item)
+- User features (age, location)
+- Item features (author, year, publisher)
+- Interaction features
+
+**Hyperparameters** (`src/config/model_config.py`):
+```python
+class LightGBMConfig:
+    NUM_LEAVES = 31
+    LEARNING_RATE = 0.05
+    NUM_ITERATIONS = 100
+    MAX_DEPTH = -1
+    MIN_DATA_IN_LEAF = 20
+    FEATURE_FRACTION = 0.8
+    BAGGING_FRACTION = 0.8
+    BAGGING_FREQ = 5
+```
+
+**Output**:
+- Model: `./data/models/lightgbm_model/`
+
+**Training Command**:
+```bash
+docker exec spark-master spark-submit \
+  --master spark://<MASTER_IP>:7077 \
+  --packages com.microsoft.azure:synapseml_2.12:0.11.3 \
+  /opt/spark-apps/training/train_lightgbm.py
+```
+
+### 4. Model Evaluation
+
+**Module**: `src/evaluation/metrics.py`
+
+**Metrics**:
+- RMSE, MAE (rating prediction)
+- Precision@K, Recall@K (ranking)
+- NDCG (Normalized Discounted Cumulative Gain)
+- Coverage (catalog coverage)
+
+---
+
+## SERVING PIPELINE
+
+### 1. API Server
+
+**Framework**: Flask + PySpark
+
+**File**: `src/api/app.py`
+
+**Endpoints**:
+
+#### GET `/`
+- Web UI homepage
+- Template: `templates/index.html`
+
+#### POST `/api/recommend`
+Request:
+```json
+{
+  "user_id": "12345",
+  "top_n": 10,
+  "use_lgbm": true
+}
+```
+
+Response:
+```json
+{
+  "user_id": "12345",
+  "recommendations": [
+    {
+      "isbn": "0439136350",
+      "title": "Harry Potter and the Prisoner of Azkaban",
+      "author": "J.K. Rowling",
+      "year": 1999,
+      "score": 8.5
+    }
+  ],
+  "user_history": [...],
+  "count": 10
+}
+```
+
+#### GET `/api/search?q=harry+potter&limit=20`
+- Search books by title/author
+- Returns matching books
+
+#### GET `/api/popular?top_n=20`
+- Get most popular books
+- Based on rating count and average rating
+
+#### POST `/api/recommend/new-user`
+Request:
+```json
+{
+  "age": 25,
+  "location": "New York",
+  "favorite_authors": ["J.K. Rowling"],
+  "favorite_genres": ["Fantasy"],
+  "top_n": 10
+}
+```
+
+- Cold-start recommendations
+- Based on demographics and preferences
+
+#### GET `/api/health`
+- Health check endpoint
+- Returns service status
+
+**Start Command**:
+```bash
+docker compose -f docker-compose.cluster.yml up -d api-server
+```
+
+**Access**: `http://<MASTER_IP>:5001`
+
+### 2. Recommendation Service
+
+**File**: `src/api/recommendation_service.py`
+
+**Class**: `RecommendationService`
+
+**Methods**:
+- `get_user_recommendations()`: Generate recommendations for existing user
+- `get_recommendations_for_new_user()`: Cold-start recommendations
+- `search_books()`: Search functionality
+- `get_user_history()`: User's past ratings
+
+**Model Loading**:
+```python
+# Load ALS model
+als_model = ALSModel.load(f"{model_path}/als_model")
+
+# Load LightGBM model (if available)
+lgbm_model = LightGBMModel.load(f"{model_path}/lightgbm_model")
+```
+
+**Recommendation Strategy**:
+1. **ALS only**: Fast, collaborative filtering
+2. **ALS + LightGBM**: Slower, more accurate (uses features)
+
+### 3. Model Classes
+
+#### ALS Recommender
+
+**File**: `src/models/als_recommender.py`
+
+**Class**: `ALSRecommender`
+
+**Methods**:
+- `train(train_df)`: Train ALS model
+- `predict(test_df)`: Generate predictions
+- `evaluate(predictions, metric)`: Calculate metrics
+- `get_user_embeddings()`: Extract user factors
+- `get_item_embeddings()`: Extract item factors
+- `recommend_for_user(user_id, n)`: Top-N recommendations
+- `save_model(path)`: Save trained model
+- `load_model(path)`: Load saved model
+
+#### LightGBM Recommender
+
+**File**: `src/models/lightgbm_recommender.py`
+
+**Class**: `LightGBMRecommender`
+
+**Methods**:
+- `train(train_df, features)`: Train LightGBM
+- `predict(test_df)`: Generate predictions
+- `evaluate(predictions, metric)`: Calculate metrics
+- `save_model(path)`: Save trained model
+- `load_model(path)`: Load saved model
+
+---
+
+## Configuration
+
+### Spark Configuration
+
+**File**: `src/config/spark_config.py`
 
 ```python
-# Code chạy trên Driver (Master hoặc Jupyter)
-df = spark.read.csv("/mnt/shared/raw_data/BX-Book-Ratings.csv")
-result = df.filter(col("rating") > 5).groupBy("user_id").count()
-result.write.parquet("/mnt/shared/data/processed/filtered.parquet")
+class SparkConfig:
+    @staticmethod
+    def create_spark_session(
+        app_name="BookCrossing-Recommender",
+        master="spark://spark-master:7077",
+        executor_memory="4g",
+        executor_cores=2,
+        driver_memory="2g"
+    )
 ```
 
-**Điều gì xảy ra:**
+**Key Settings**:
+- Adaptive Query Execution: Enabled
+- Serializer: Kryo (faster)
+- Compression: Snappy (Parquet)
+- Shuffle partitions: 200
+- Network timeout: 600s
+
+### Model Configuration
+
+**File**: `src/config/model_config.py`
+
+**Classes**:
+- `ALSConfig`: ALS hyperparameters
+- `LightGBMConfig`: LightGBM hyperparameters
+- `DataConfig`: Train/val/test split ratios
+
+---
+
+## Utilities
+
+### Spark Utils
+
+**File**: `src/utils/spark_utils.py`
+
+**Functions**:
+- `save_parquet()`: Save DataFrame to Parquet
+- `load_parquet()`: Load Parquet to DataFrame
+- `print_dataframe_info()`: Display DataFrame stats
+
+### Logger
+
+**File**: `src/utils/logger.py`
+
+**Function**: `get_default_logger(name)`
+
+Centralized logging configuration.
+
+---
+
+## Data Storage Structure
 
 ```
-Step 1: Driver (Master) tạo execution plan
-┌─────────────┐
-│   Master    │  "Tôi cần đọc file CSV, filter, group by"
-│   Driver    │  → Tạo DAG (Directed Acyclic Graph)
-└─────────────┘  → Chia thành các tasks
+./data/                          # Processed data (on master machine)
+  ├── processed/
+  │   ├── ratings.parquet        # Cleaned ratings
+  │   ├── users.parquet          # User features
+  │   ├── books.parquet          # Book features
+  │   ├── train_ratings.parquet
+  │   ├── validation_ratings.parquet
+  │   └── test_ratings.parquet
+  ├── embeddings/
+  │   ├── als_user_embeddings.parquet
+  │   └── als_item_embeddings.parquet
+  └── models/
+      ├── als_model/             # Spark ALS model
+      └── lightgbm_model/        # LightGBM model
 
-Step 2: Master phân bổ tasks cho Workers
-┌─────────────┐
-│   Master    │  "Worker 1: xử lý partition 0-99"
-└──────┬──────┘  "Worker 2: xử lý partition 100-199"
-       │
-       ├──────────────┬──────────────┐
-       ▼              ▼              ▼
-   Worker 1       Worker 2       Worker 3
-
-Step 3: Workers đọc dữ liệu TRỰC TIẾP từ Shared Storage
-┌──────────────┐
-│    Worker 1  │ ──READ──→ /mnt/shared/raw_data/file.csv (rows 0-999)
-└──────────────┘
-
-┌──────────────┐
-│    Worker 2  │ ──READ──→ /mnt/shared/raw_data/file.csv (rows 1000-1999)
-└──────────────┘
-
-Step 4: Workers xử lý dữ liệu trong memory
-┌──────────────┐
-│    Worker 1  │  Filter → Group By → Aggregate
-└──────────────┘  (Xử lý partition của nó)
-
-┌──────────────┐
-│    Worker 2  │  Filter → Group By → Aggregate
-└──────────────┘  (Xử lý partition của nó)
-
-Step 5: Shuffle data giữa workers (nếu cần)
-┌──────────────┐         ┌──────────────┐
-│    Worker 1  │ ←─────→ │    Worker 2  │
-└──────────────┘  Data   └──────────────┘
-                Exchange
-
-Step 6: Workers ghi kết quả TRỰC TIẾP vào Shared Storage
-┌──────────────┐
-│    Worker 1  │ ──WRITE──→ /mnt/shared/data/processed/part-00000.parquet
-└──────────────┘
-
-┌──────────────┐
-│    Worker 2  │ ──WRITE──→ /mnt/shared/data/processed/part-00001.parquet
-└──────────────┘
+./raw_data/                      # Raw CSV files
+  ├── BX-Book-Ratings.csv
+  ├── BX-Users.csv
+  └── BX-Books.csv
 ```
 
-## Tại sao cần Shared Storage?
+---
 
-### ❌ KHÔNG dùng Shared Storage:
-```
-Master có dữ liệu → Workers phải lấy từ Master
-→ Master trở thành bottleneck
-→ Không scale được
-→ Master quá tải
-```
+## Docker Volumes Mapping
 
-### ✅ Dùng Shared Storage:
-```
-Shared Storage ← Workers đọc/ghi song song
-→ Không có bottleneck
-→ Scale tốt
-→ Master chỉ điều phối
-```
+**In `docker-compose.cluster.yml`**:
 
-## Các loại Shared Storage
+```yaml
+# Spark Master & API Server
+volumes:
+  - ./data:/opt/spark-data           # Processed data, models
+  - ./raw_data:/opt/raw-data         # Raw CSV files
+  - ./src:/opt/spark-apps            # Source code
+  - ./scripts:/opt/scripts           # Helper scripts
 
-### 1. NFS (Network File System)
-```
-┌─────────────┐
-│ Master Node │ ← NFS Server
-│ /mnt/shared │
-└──────┬──────┘
-       │
-       ├──────────────┬──────────────┐
-       ▼              ▼              ▼
-   Worker 1       Worker 2       Worker 3
-   (NFS Client)   (NFS Client)   (NFS Client)
-   /mnt/shared    /mnt/shared    /mnt/shared
+# Spark Workers
+volumes:
+  - ./src:/opt/spark-apps            # Source code (read-only)
+  - ./scripts:/opt/scripts           # Helper scripts
+  - worker-X-cache:/opt/spark-data   # Local cache
 ```
 
-**Ưu điểm:**
-- Dễ setup
-- Transparent (như local filesystem)
+**Path trong code phải match với Docker volumes!**
 
-**Nhược điểm:**
-- Single point of failure (NFS server)
-- Performance giới hạn bởi network bandwidth
+---
 
-### 2. HDFS (Hadoop Distributed File System)
-```
-┌─────────────────────────────────────────────┐
-│         HDFS Cluster (Distributed)          │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  │
-│  │ DataNode │  │ DataNode │  │ DataNode │  │
-│  │ (Master) │  │(Worker 1)│  │(Worker 2)│  │
-│  └──────────┘  └──────────┘  └──────────┘  │
-└─────────────────────────────────────────────┘
-```
+## Deployment Flow
 
-**Ưu điểm:**
-- Highly available (replication)
-- Better performance (data locality)
-- No single point of failure
+### Training Phase
 
-**Nhược điểm:**
-- Phức tạp hơn để setup
+1. **Upload data** → `./raw_data/`
+2. **Preprocessing** → `docker exec spark-master spark-submit /opt/scripts/run_preprocessing.py`
+3. **Train ALS** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_als.py`
+4. **Train LightGBM** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_lightgbm.py`
+5. **Models saved** → `./data/models/`
 
-### 3. Cloud Storage (S3, GCS, Azure Blob)
-```
-┌─────────────────────────────────────────────┐
-│         Cloud Storage (AWS S3)              │
-│         s3://my-bucket/data/                │
-└─────────────────────────────────────────────┘
-         ▲              ▲              ▲
-         │              │              │
-     Master         Worker 1       Worker 2
-```
+### Serving Phase
 
-**Ưu điểm:**
-- Highly available
-- Unlimited storage
-- Managed service
+1. **Start API Server** → `docker compose -f docker-compose.cluster.yml up -d api-server`
+2. **API loads models** from `./data/models/`
+3. **API ready** at `http://<MASTER_IP>:5001`
+4. **Make requests** via REST API or Web UI
 
-**Nhược điểm:**
-- Latency cao hơn
-- Chi phí bandwidth
+---
 
-## Data Locality Optimization
+## Performance Optimization
 
-Spark cố gắng tối ưu bằng cách:
+### Training
 
-```
-1. NODE_LOCAL: Data và task trên cùng node
-   ┌──────────────┐
-   │   Worker 1   │
-   │ - Data: ✓    │  ← Best case
-   │ - Task: ✓    │
-   └──────────────┘
+1. **Data Partitioning**: Adjust `spark.sql.shuffle.partitions` based on data size
+2. **Caching**: Cache frequently accessed DataFrames
+3. **Checkpointing**: Enable for iterative algorithms (ALS)
+4. **Resource Allocation**: Increase executor memory/cores for large datasets
 
-2. RACK_LOCAL: Data và task trong cùng rack
-   ┌──────────────┐     ┌──────────────┐
-   │   Worker 1   │────→│   Worker 2   │
-   │ - Data: ✓    │     │ - Task: ✓    │
-   └──────────────┘     └──────────────┘
-   (Same rack - fast network)
+### Serving
 
-3. ANY: Data và task ở khác rack
-   ┌──────────────┐           ┌──────────────┐
-   │   Worker 1   │─────X─────│   Worker 3   │
-   │ - Data: ✓    │           │ - Task: ✓    │
-   └──────────────┘           └──────────────┘
-   (Different rack - slower)
-```
+1. **Model Caching**: Keep models in memory
+2. **Batch Predictions**: Process multiple users at once
+3. **Pre-computation**: Pre-compute popular recommendations
+4. **Connection Pooling**: Reuse Spark sessions
 
-## Trong project này với Tailscale + NFS
+---
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│              Master Node (100.101.102.103)                  │
-│                                                             │
-│  ┌──────────────┐         ┌─────────────────────────┐      │
-│  │ Spark Master │         │ NFS Server              │      │
-│  │ (Coordinator)│         │ /mnt/shared/            │      │
-│  └──────────────┘         │ - raw_data/             │      │
-│                           │ - data/processed/       │      │
-│                           │ - data/embeddings/      │      │
-│                           │ - data/models/          │      │
-│                           └─────────────────────────┘      │
-└─────────────────────────────────────────────────────────────┘
-                                    ▲
-                                    │ NFS over Tailscale VPN
-                    ┌───────────────┼───────────────┐
-                    │               │               │
-        ┌───────────▼──────────┐   │   ┌───────────▼──────────┐
-        │ Worker 1             │   │   │ Worker 2             │
-        │ 100.101.102.104      │   │   │ 100.101.102.105      │
-        │                      │   │   │                      │
-        │ ┌──────────────────┐ │   │   │ ┌──────────────────┐ │
-        │ │ Spark Worker     │ │   │   │ │ Spark Worker     │ │
-        │ │ (Executor)       │ │   │   │ │ (Executor)       │ │
-        │ └──────────────────┘ │   │   │ └──────────────────┘ │
-        │                      │   │   │                      │
-        │ /mnt/shared/         │   │   │ /mnt/shared/         │
-        │ (NFS Mount)          │   │   │ (NFS Mount)          │
-        │ ├─ raw_data/         │   │   │ ├─ raw_data/         │
-        │ ├─ data/processed/   │   │   │ ├─ data/processed/   │
-        │ ├─ data/embeddings/  │   │   │ ├─ data/embeddings/  │
-        │ └─ data/models/      │   │   │ └─ data/models/      │
-        └──────────────────────┘   │   └──────────────────────┘
-                                   │
-                       ┌───────────▼──────────┐
-                       │ Worker 3             │
-                       │ 100.101.102.106      │
-                       │ /mnt/shared/         │
-                       └──────────────────────┘
-```
+## Monitoring
 
-## Ví dụ cụ thể: Training ALS Model
+### Spark UIs
 
-```python
-# 1. Driver (trên Master hoặc Jupyter) đọc metadata
-ratings_df = spark.read.parquet("/mnt/shared/data/processed/ratings.parquet")
-# → Master chỉ đọc schema, không đọc toàn bộ data
+- **Master UI**: `http://<MASTER_IP>:8080` - Cluster status, workers
+- **Worker UI**: `http://<WORKER_IP>:8081` - Worker resources, executors
+- **Application UI**: `http://<MASTER_IP>:4040` - Job details, stages, tasks
 
-# 2. Master tạo execution plan
-train_df, test_df = ratings_df.randomSplit([0.8, 0.2])
-als = ALS(rank=50, maxIter=20)
-model = als.fit(train_df)  # ← Trigger execution
+### Kafka UI
 
-# 3. Master phân bổ tasks
-# Task 1 → Worker 1: "Đọc partition 0-99 từ /mnt/shared/..."
-# Task 2 → Worker 2: "Đọc partition 100-199 từ /mnt/shared/..."
-# Task 3 → Worker 3: "Đọc partition 200-299 từ /mnt/shared/..."
+- **Kafka UI**: `http://<MASTER_IP>:8090` - Topics, messages, consumers
 
-# 4. Workers đọc data TRỰC TIẾP từ /mnt/shared
-# Worker 1: mount /mnt/shared → đọc part-00000.parquet
-# Worker 2: mount /mnt/shared → đọc part-00001.parquet
-# Worker 3: mount /mnt/shared → đọc part-00002.parquet
-
-# 5. Workers xử lý ALS algorithm
-# - Matrix factorization
-# - Gradient descent
-# - Shuffle data giữa workers khi cần
-
-# 6. Workers ghi embeddings TRỰC TIẾP vào /mnt/shared
-# Worker 1 → /mnt/shared/data/embeddings/part-00000.parquet
-# Worker 2 → /mnt/shared/data/embeddings/part-00001.parquet
-# Worker 3 → /mnt/shared/data/embeddings/part-00002.parquet
-```
-
-## Network Traffic Pattern
-
-### ❌ Nếu Workers lấy data từ Master:
-```
-Master (Bottleneck!)
-  ↓ 100MB/s
-Worker 1
-  ↓ 100MB/s
-Worker 2
-  ↓ 100MB/s
-Worker 3
-
-Total: 300MB/s qua Master → KHÔNG SCALE!
-```
-
-### ✅ Workers đọc từ Shared Storage:
-```
-Shared Storage (NFS Server)
-  ↓ 100MB/s    ↓ 100MB/s    ↓ 100MB/s
-Worker 1     Worker 2     Worker 3
-
-Total: 300MB/s song song → SCALE TỐT!
-Master chỉ gửi metadata và commands (KB/s)
-```
-
-## Monitoring Data Access
-
-Để xem workers đang đọc/ghi từ đâu:
+### Logs
 
 ```bash
-# Trên Worker node
-# 1. Kiểm tra NFS mount
-df -h | grep nfs
-# Output: 100.101.102.103:/mnt/shared  100G  10G  90G  10% /mnt/shared
+# Application logs
+docker logs spark-master
+docker logs spark-worker-1
+docker logs api-server
 
-# 2. Monitor NFS traffic
-nfsstat -c
-
-# 3. Monitor disk I/O
-iostat -x 1
-
-# 4. Xem Spark UI
-# http://100.101.102.103:8080
-# → Click vào running application
-# → Tab "Storage" → Xem data location
-# → Tab "Executors" → Xem I/O metrics
+# Spark logs
+./logs/spark/
 ```
 
-## Tóm tắt
+---
 
-| Thành phần | Vai trò | Đọc/Ghi dữ liệu từ đâu |
-|------------|---------|------------------------|
-| **Master** | Điều phối, schedule tasks | Shared Storage (chỉ metadata) |
-| **Workers** | Thực thi tasks, xử lý data | **Shared Storage (trực tiếp)** |
-| **Shared Storage** | Lưu trữ tập trung | N/A |
-| **Driver** | Submit jobs, collect results | Shared Storage hoặc local |
+## Scaling Strategy
 
-**Key Point:** Workers KHÔNG bao giờ lấy dữ liệu từ Master. Tất cả đều đọc/ghi trực tiếp từ Shared Storage!
+### Horizontal Scaling (Add Workers)
+
+```bash
+# On new machine
+# Edit .env: WORKER_ID=4, THIS_MACHINE_IP=..., MASTER_TAILSCALE_IP=...
+docker compose -f docker-compose.cluster.yml up -d spark-worker
+```
+
+### Vertical Scaling (Increase Resources)
+
+```bash
+# Edit .env
+SPARK_WORKER_CORES=8
+SPARK_WORKER_MEMORY=16g
+
+# Restart
+docker compose -f docker-compose.cluster.yml restart spark-worker
+```
+
+---
+
+## Security
+
+- ✅ **Tailscale VPN**: All traffic encrypted
+- ✅ **No public ports**: Only accessible within Tailscale network
+- ✅ **Authentication**: Can add API keys to Flask endpoints
+- ✅ **Data isolation**: Each worker has isolated cache
+
+---
+
+## Future Enhancements
+
+### Training Pipeline
+- [ ] Hyperparameter tuning (Grid Search, Bayesian Optimization)
+- [ ] Model versioning (MLflow)
+- [ ] A/B testing framework
+- [ ] Online learning (incremental updates)
+
+### Serving Pipeline
+- [ ] Caching layer (Redis)
+- [ ] Load balancing (multiple API servers)
+- [ ] Rate limiting
+- [ ] User feedback loop
+
+### Infrastructure
+- [ ] Kubernetes deployment
+- [ ] Auto-scaling workers
+- [ ] Monitoring (Prometheus + Grafana)
+- [ ] CI/CD pipeline

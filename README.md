@@ -2,348 +2,208 @@
 
 Hệ thống gợi ý sách phân tán sử dụng Spark ALS và LightGBM với dữ liệu BookCrossing.
 
-## Kiến trúc hệ thống
+**Pipeline**: Kafka → Parquet (Data Lake) → Spark Cluster → ML Models → API
 
-### Các thành phần chính:
-- **Spark Master**: Điều phối các tác vụ phân tán
-- **Spark Workers**: Thực thi các tác vụ (có thể mở rộng trên nhiều máy)
-- **Jupyter Notebook**: Phát triển và phân tích tương tác
-- **Shared Storage**: Lưu trữ dữ liệu và mô hình dạng Parquet
+## Kiến trúc phân tán linh hoạt
 
-### Mô hình:
-1. **Spark ALS**: Collaborative Filtering để tạo user/item embeddings
-2. **LightGBM**: Gradient Boosting trên embeddings và features
+Mỗi máy có thể chạy:
+- **Spark Master** + Kafka + Jupyter + API (máy có data)
+- **Spark Worker** (1 hoặc nhiều workers trên cùng 1 máy)
+- **Cả Master và Worker** (máy Mac có thể vừa là master vừa là worker)
 
-## Cài đặt và Triển khai
+**Connection**: Tailscale VPN (encrypted, no port forwarding)
 
-### Yêu cầu hệ thống
-- Docker Desktop (Mac/Windows) hoặc Docker Engine (Linux)
-- Docker Compose v2.0+
-- Tối thiểu 8GB RAM, khuyến nghị 16GB+
-- Tối thiểu 20GB dung lượng ổ cứng
+## Yêu cầu
 
-### 1. Triển khai Local (Single Machine)
+- Docker Desktop + Tailscale VPN
+- RAM: 8GB minimum, 16GB+ recommended
+- Storage: 50GB+ cho máy có data
 
-**Trên Linux / macOS / Windows với WSL:**
+## Setup
+
+### 1. Cài Tailscale
+
 ```bash
-# Build và khởi động tất cả services
-docker compose up -d
+# macOS
+brew install tailscale
+sudo tailscale up
 
-# Kiểm tra logs
-docker compose logs -f
-
-# Dừng services
-docker compose down
+# Windows: https://tailscale.com/download/windows
+# Linux: curl -fsSL https://tailscale.com/install.sh | sh
 ```
 
-**Trên Windows (PowerShell - không dùng WSL):**
-```powershell
-# Build và khởi động tất cả services
-docker compose up -d
+### 2. Lấy Tailscale IP
 
-# Kiểm tra logs
-docker compose logs -f
-
-# Dừng services
-docker compose down
-```
-
-**Lưu ý cho Windows:**
-- Đảm bảo Docker Desktop đã bật WSL 2 backend (Settings > General > Use WSL 2)
-- Nếu gặp lỗi line endings, chạy: `git config --global core.autocrlf false`
-
-**Truy cập các services:**
-- Spark Master UI: http://localhost:8080
-- Spark Worker 1 UI: http://localhost:8081
-- Spark Worker 2 UI: http://localhost:8082
-- Spark Worker 3 UI: http://localhost:8083
-- Jupyter Lab: http://localhost:8888
-
-### 2. Triển khai Phân tán (Multi-Host)
-
-#### Bước 1: Chuẩn bị Shared Storage
-
-**Trên Linux / Windows với WSL:**
 ```bash
-# Tạo thư mục shared
-sudo mkdir -p /mnt/shared/{data,raw_data,logs}
-
-# Mount NFS hoặc distributed filesystem
-# Ví dụ với NFS:
-sudo mount -t nfs <nfs-server-ip>:/shared /mnt/shared
+tailscale ip -4
+# Output: 100.x.x.x
 ```
 
-**Trên macOS:**
+### 3. Cấu hình .env
+
 ```bash
-# Tạo thư mục shared trong home directory (không cần sudo)
-mkdir -p ~/shared/{data,raw_data,logs}
+# Copy template
+cp .env.tailscale .env
 
-# Mount NFS hoặc distributed filesystem
-# Ví dụ với NFS:
-sudo mount -t nfs <nfs-server-ip>:/shared ~/shared
+# Sửa file .env
+nano .env  # hoặc notepad .env trên Windows
 ```
 
-**Trên Windows (không dùng WSL):**
-```powershell
-# Mở PowerShell với quyền Administrator
-# Tạo thư mục shared
-New-Item -Path "C:\shared\data" -ItemType Directory -Force
-New-Item -Path "C:\shared\raw_data" -ItemType Directory -Force
-New-Item -Path "C:\shared\logs" -ItemType Directory -Force
-
-# Mount network drive (ví dụ với SMB/CIFS)
-net use Z: \\<server-ip>\shared
-```
-
-#### Bước 2: Copy dữ liệu
-
-**Trên Linux / Windows với WSL:**
+**Điền các giá trị:**
 ```bash
-# Copy dữ liệu BookCrossing vào shared storage
-cp -r raw_data/* /mnt/shared/raw_data/
+THIS_MACHINE_IP=100.x.x.x        # IP của máy này
+MASTER_TAILSCALE_IP=100.y.y.y    # IP của máy chạy Master
+WORKER_ID=1                       # ID của worker (1, 2, 3, ...)
+SPARK_WORKER_CORES=4              # Số cores cho worker
+SPARK_WORKER_MEMORY=8g            # RAM cho worker
 ```
 
-**Trên macOS:**
+### 4. Chạy Services
+
+**Trên máy chạy Master (có data):**
 ```bash
-# Copy dữ liệu BookCrossing vào shared storage
-cp -r raw_data/* ~/shared/raw_data/
+docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper kafka-ui jupyter-notebook api-server
 ```
 
-**Trên Windows (không dùng WSL):**
-```powershell
-# Copy dữ liệu BookCrossing vào shared storage
-Copy-Item -Path "raw_data\*" -Destination "C:\shared\raw_data\" -Recurse
-```
-
-#### Bước 3: Triển khai Master Node
-Trên máy Master (ví dụ: 192.168.1.100):
-
-**Trên Linux / macOS / Windows với WSL:**
+**Trên máy chạy Worker (bất kỳ máy nào):**
 ```bash
-# Set environment variables
-export SPARK_MASTER_HOST=192.168.1.100
+# Worker 1
+docker compose -f docker-compose.cluster.yml up -d spark-worker
 
-# Start master và jupyter
-docker compose -f docker-compose.distributed.yml up -d spark-master jupyter
+# Worker 2 trên cùng máy (optional)
+WORKER_ID=2 docker compose -f docker-compose.cluster.yml up -d spark-worker
+
+# Worker 3 trên cùng máy (optional)
+WORKER_ID=3 docker compose -f docker-compose.cluster.yml up -d spark-worker
 ```
 
-**Trên Windows (PowerShell - không dùng WSL):**
-```powershell
-# Set environment variables
-$env:SPARK_MASTER_HOST="192.168.1.100"
-
-# Start master và jupyter
-docker compose -f docker-compose.distributed.yml up -d spark-master jupyter
-```
-
-#### Bước 4: Triển khai Worker Nodes
-Trên mỗi máy Worker (ví dụ: 192.168.1.101, 192.168.1.102):
-
-**Trên Linux / macOS / Windows với WSL:**
+**Máy Mac vừa Master vừa Worker:**
 ```bash
-# Set environment variables
-export SPARK_MASTER_HOST=192.168.1.100
-export DOCKER_HOST_IP=<worker-machine-ip>
-export SPARK_WORKER_CORES=4
-export SPARK_WORKER_MEMORY=8g
-
-# Start worker
-docker compose -f docker-compose.distributed.yml up -d spark-worker
+# Start tất cả
+docker compose -f docker-compose.cluster.yml up -d
 ```
 
-**Trên Windows (PowerShell - không dùng WSL):**
-```powershell
-# Set environment variables
-$env:SPARK_MASTER_HOST="192.168.1.100"
-$env:DOCKER_HOST_IP="<worker-machine-ip>"
-$env:SPARK_WORKER_CORES="4"
-$env:SPARK_WORKER_MEMORY="8g"
+### 5. Verify Cluster
 
-# Start worker
-docker compose -f docker-compose.distributed.yml up -d spark-worker
-```
+Truy cập: `http://<MASTER_IP>:8080` để xem workers đã kết nối
 
-#### Bước 5: Kiểm tra Cluster
-Truy cập Spark Master UI tại: http://192.168.1.100:8080
-Bạn sẽ thấy tất cả workers đã kết nối.
+**Services:**
+- Spark Master UI: `http://[MASTER_IP]:8080`
+- Spark Worker UIs: `http://[WORKER_IP]:8081`, `8082`, `8083`, ...
+- Jupyter Lab: `http://[MASTER_IP]:8888`
+- Kafka UI: `http://[MASTER_IP]:8090`
+- API Server: `http://[MASTER_IP]:5001`
 
-## Pipeline Xử lý Dữ liệu
+## Data Pipeline
 
-### 1. Preprocessing
+### 1. Kafka Topics
+
 ```bash
-# Chạy trong Jupyter hoặc submit job
+docker exec -it kafka bash
+kafka-topics --create --topic book-ratings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+kafka-topics --list --bootstrap-server localhost:9092
+```
+
+### 2. Preprocessing
+
+```bash
 docker exec spark-master spark-submit \
-  --master spark://spark-master:7077 \
-  --deploy-mode client \
+  --master spark://<MASTER_IP>:7077 \
   /opt/scripts/run_preprocessing.py
 ```
 
-**Output:**
-- `/opt/spark-data/processed/ratings.parquet`
-- `/opt/spark-data/processed/users.parquet`
-- `/opt/spark-data/processed/books.parquet`
+### 3. Train Models
 
-### 2. Training ALS Model
 ```bash
+# ALS Model
 docker exec spark-master spark-submit \
-  --master spark://spark-master:7077 \
-  --deploy-mode client \
+  --master spark://<MASTER_IP>:7077 \
   /opt/spark-apps/training/train_als.py
-```
 
-**Output:**
-- `/opt/spark-data/models/als_model/`
-- `/opt/spark-data/embeddings/als_user_embeddings.parquet`
-- `/opt/spark-data/embeddings/als_item_embeddings.parquet`
-
-### 3. Training LightGBM Model
-```bash
-# Cài đặt SynapseML trước
-pip install synapseml
-
-# Train model
+# LightGBM Model
 docker exec spark-master spark-submit \
-  --master spark://spark-master:7077 \
+  --master spark://<MASTER_IP>:7077 \
   --packages com.microsoft.azure:synapseml_2.12:0.11.3 \
   /opt/spark-apps/training/train_lightgbm.py
 ```
 
-## Cấu trúc Dữ liệu
+## Monitoring
 
-### BookCrossing Dataset
-- **BX-Book-Ratings.csv**: User ratings (user_id, isbn, rating)
-- **BX-Users.csv**: User information (user_id, location, age)
-- **BX_Books.csv**: Book information (isbn, title, author, year, publisher)
-
-### Processed Data (Parquet)
-- **ratings.parquet**: Cleaned ratings với user_index và item_index
-- **users.parquet**: User features
-- **books.parquet**: Book features
-- **embeddings/**: ALS user và item embeddings
-
-## Development
-
-### Chạy Jupyter Notebook
 ```bash
-# Jupyter đã tự động start, truy cập:
-http://localhost:8888
+# Check status
+docker compose -f docker-compose.cluster.yml ps
 
-# Hoặc xem token:
-docker logs jupyter-notebook
+# View logs
+docker compose -f docker-compose.cluster.yml logs -f
+docker logs spark-worker-1
+
+# Restart services
+docker compose -f docker-compose.cluster.yml restart
 ```
-
-### Chạy Tests
-```bash
-docker exec spark-master python -m pytest /opt/spark-apps/tests/
-```
-
-### Monitoring
-- **Spark Master UI**: Xem cluster status, running jobs
-- **Spark Worker UI**: Xem worker resources, executors
-- **Spark Application UI**: Xem job details, stages, tasks (port 4040)
-
-## Cấu hình
-
-### Spark Configuration
-Chỉnh sửa `src/config/spark_config.py`:
-- Executor memory
-- Executor cores
-- Driver memory
-- Shuffle partitions
-
-### Model Hyperparameters
-Chỉnh sửa `src/config/model_config.py`:
-- ALS: rank, iterations, regularization
-- LightGBM: num_leaves, learning_rate, iterations
-
-## Cấu hình Docker Volumes cho các Platform
-
-### macOS
-Docker Desktop trên macOS sử dụng VM, nên volumes được mount qua file sharing:
-- Mặc định, Docker có thể truy cập: `/Users`, `/Volumes`, `/private`, `/tmp`
-- Nếu cần mount thư mục khác, vào Docker Desktop > Settings > Resources > File Sharing
-- Khuyến nghị sử dụng thư mục trong `~/` để tránh vấn đề permission
-
-### Windows với WSL 2
-Docker Desktop sử dụng WSL 2 backend:
-- Volumes trong WSL: `/mnt/wsl/...` hoặc `\\wsl$\Ubuntu\home\...`
-- Volumes trong Windows: `C:\Users\...` được mount tự động
-- Khuyến nghị: Đặt project trong WSL filesystem để tốc độ tốt hơn
-
-### Windows không dùng WSL (Hyper-V)
-- Volumes phải ở trong `C:\Users\` hoặc được share trong Docker Desktop Settings
-- Sử dụng đường dẫn Windows: `C:\shared\data` thay vì `/mnt/shared/data`
-- Chú ý: Performance có thể chậm hơn so với WSL 2
-
-### Linux
-- Volumes được mount trực tiếp từ filesystem
-- Không có overhead như macOS hay Windows
-- Cần chú ý permission: user trong container phải có quyền truy cập
 
 ## Troubleshooting
 
-### Worker không kết nối được Master
+**Worker không kết nối:**
 ```bash
-# Kiểm tra network
-docker network inspect recommender_spark-network
-
-# Kiểm tra logs
+ping <MASTER_IP>
+telnet <MASTER_IP> 7077
 docker logs spark-worker-1
 ```
 
-### Out of Memory
+**Tăng memory:**
 ```bash
-# Tăng executor memory trong docker-compose.yml
-SPARK_WORKER_MEMORY=8g
-
-# Hoặc giảm số partitions
-spark.sql.shuffle.partitions=100
+# Edit .env: SPARK_WORKER_MEMORY=16g
+docker compose -f docker-compose.cluster.yml restart spark-worker
 ```
 
-### Slow Performance
-- Tăng số workers
-- Tăng executor cores
-- Optimize data partitioning
-- Enable adaptive query execution
+## Stop Services
 
-### Lỗi Permission Denied (macOS/Linux)
 ```bash
-# Kiểm tra ownership của thư mục
-ls -la ~/shared
+# Stop tất cả
+docker compose -f docker-compose.cluster.yml down
 
-# Thay đổi ownership nếu cần
-sudo chown -R $(whoami):$(whoami) ~/shared
+# Stop specific service
+docker compose -f docker-compose.cluster.yml stop spark-worker
 ```
 
-### Lỗi Line Endings trên Windows
+## Ví dụ Deployment
+
+### Scenario 1: Mac Master + Windows Worker
+**Mac (có data):**
 ```bash
-# Nếu gặp lỗi "bad interpreter" hoặc script không chạy
-git config --global core.autocrlf false
-git rm --cached -r .
-git reset --hard
+# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
+docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper jupyter-notebook
 ```
-
-### Docker Desktop không khởi động (Windows)
-- Kiểm tra Hyper-V hoặc WSL 2 đã được bật
-- Chạy: `wsl --set-default-version 2`
-- Restart Docker Desktop
-
-### Volume mount không hoạt động
-**macOS:**
-- Kiểm tra File Sharing trong Docker Desktop Settings
-- Thử restart Docker Desktop
 
 **Windows:**
-- Kiểm tra drive đã được share trong Docker Desktop Settings
-- Đảm bảo đường dẫn sử dụng forward slash `/` trong docker-compose.yml
+```bash
+# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1, WORKER_ID=1
+docker compose -f docker-compose.cluster.yml up -d spark-worker
+```
 
-## Tài liệu tham khảo
+### Scenario 2: Mac vừa Master vừa Worker + Windows 2 Workers
+**Mac:**
+```bash
+# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1, WORKER_ID=1
+docker compose -f docker-compose.cluster.yml up -d
+```
 
-- [Apache Spark Documentation](https://spark.apache.org/docs/latest/)
-- [Spark MLlib Guide](https://spark.apache.org/docs/latest/ml-guide.html)
-- [LightGBM Documentation](https://lightgbm.readthedocs.io/)
-- [SynapseML](https://microsoft.github.io/SynapseML/)
+**Windows:**
+```bash
+# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1
+WORKER_ID=2 docker compose -f docker-compose.cluster.yml up -d spark-worker
+WORKER_ID=3 docker compose -f docker-compose.cluster.yml up -d spark-worker
+```
+
+## Tài liệu
+
+- **[ARCHITECTURE.md](ARCHITECTURE.md)**: Chi tiết kiến trúc, training pipeline, serving pipeline
+- **Source code**: `src/` directory
+  - Training: `src/training/`
+  - Models: `src/models/`
+  - API: `src/api/`
+  - Config: `src/config/`
 
 ## License
 
-MIT License
+MIT
