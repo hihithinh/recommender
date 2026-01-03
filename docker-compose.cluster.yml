@@ -143,58 +143,42 @@ services:
     restart: unless-stopped
 
   # ============================================
-  # KAFKA + ZOOKEEPER (chỉ chạy trên máy có Master)
+  # HDFS - Distributed File System
   # ============================================
-  zookeeper:
-    image: confluentinc/cp-zookeeper:latest
-    container_name: zookeeper
-    hostname: zookeeper
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
+  namenode:
+    image: bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8
+    container_name: namenode
+    hostname: namenode
     ports:
-      - "2181:2181"
+      - "9870:9870"  # HDFS Web UI
+      - "9000:9000"  # HDFS RPC
+    environment:
+      - CLUSTER_NAME=spark-hdfs
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - CORE_CONF_hadoop_http_staticuser_user=root
+      - HDFS_CONF_dfs_replication=2
+      - HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check=false
     volumes:
-      - zookeeper-data:/var/lib/zookeeper/data
-      - zookeeper-logs:/var/lib/zookeeper/log
+      - namenode-data:/hadoop/dfs/name
     networks:
       - spark-network
     restart: unless-stopped
 
-  kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    container_name: kafka
-    hostname: kafka
+  datanode-1:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    container_name: datanode-1
+    hostname: datanode-1
     depends_on:
-      - zookeeper
+      - namenode
     ports:
-      - "9092:9092"
-      - "29092:29092"
+      - "9864:9864"
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://${MASTER_TAILSCALE_IP:-localhost}:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - CORE_CONF_hadoop_http_staticuser_user=root
+      - HDFS_CONF_dfs_replication=2
+      - HDFS_CONF_dfs_datanode_data_dir=/hadoop/dfs/data
     volumes:
-      - kafka-data:/var/lib/kafka/data
-    networks:
-      - spark-network
-    restart: unless-stopped
-
-  kafka-ui:
-    image: provectuslabs/kafka-ui:latest
-    container_name: kafka-ui
-    depends_on:
-      - kafka
-    ports:
-      - "8090:8080"
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      - datanode-1-data:/hadoop/dfs/data
     networks:
       - spark-network
     restart: unless-stopped
@@ -210,7 +194,6 @@ services:
     hostname: jupyter
     depends_on:
       - spark-master
-      - kafka
     ports:
       - "8888:8888"
     volumes:
@@ -222,7 +205,6 @@ services:
     environment:
       - SPARK_MASTER_URL=spark://spark-master:7077
       - JUPYTER_ENABLE_LAB=yes
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
     networks:
       - spark-network
     restart: unless-stopped
@@ -251,7 +233,6 @@ services:
       - DATA_PATH=/opt/spark-data
       - MODEL_PATH=/opt/spark-data/models
       - PYTHONPATH=/opt/spark-apps
-      - KAFKA_BOOTSTRAP_SERVERS=kafka:29092
     networks:
       - spark-network
     restart: unless-stopped
@@ -261,9 +242,8 @@ networks:
     driver: bridge
 
 volumes:
-  zookeeper-data:
-  zookeeper-logs:
-  kafka-data:
+  namenode-data:
+  datanode-1-data:
   worker-1-cache:
   worker-1-logs:
   worker-2-cache:

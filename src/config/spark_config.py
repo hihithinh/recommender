@@ -30,6 +30,7 @@ class SparkConfig:
                 .config("spark.driver.bindAddress", "0.0.0.0")
                 .config("spark.driver.port", "35000")
                 .config("spark.driver.blockManager.port", "35001")
+                .config("spark.hadoop.fs.defaultFS", "hdfs://namenode:9000")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
@@ -47,8 +48,8 @@ class SparkConfig:
     @staticmethod
     def get_data_paths():
         return {
-            "raw_data": "/opt/raw-data",
-            "processed_data": "/opt/spark-data/processed",
-            "embeddings": "/opt/spark-data/embeddings",
-            "models": "/opt/spark-data/models"
+            "raw_data": "hdfs://namenode:9000/data/raw",
+            "processed_data": "hdfs://namenode:9000/data/processed",
+            "embeddings": "hdfs://namenode:9000/data/embeddings",
+            "models": "hdfs://namenode:9000/data/models"
         }

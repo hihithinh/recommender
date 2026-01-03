@@ -2,12 +2,12 @@
 
 Hệ thống gợi ý sách phân tán sử dụng Spark ALS và LightGBM với dữ liệu BookCrossing.
 
-**Pipeline**: Kafka → Parquet (Data Lake) → Spark Cluster → ML Models → API
+**Pipeline**: HDFS (Distributed Storage) → Spark Cluster → ML Models → API
 
 ## Kiến trúc phân tán linh hoạt
 
 Mỗi máy có thể chạy:
-- **Spark Master** + Kafka + Jupyter + API (máy có data)
+- **Spark Master** + HDFS + Jupyter + API (máy có data)
 - **Spark Worker** (1 hoặc nhiều workers trên cùng 1 máy)
 - **Cả Master và Worker** (máy Mac có thể vừa là master vừa là worker)
 
@@ -63,7 +63,7 @@ SPARK_WORKER_MEMORY=8g            # RAM cho worker
 
 **Trên máy chạy Master (có data):**
 ```bash
-docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper kafka-ui jupyter-notebook api-server
+docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 jupyter-notebook api-server
 ```
 
 **Trên máy chạy Worker (bất kỳ máy nào):**
@@ -83,8 +83,8 @@ docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2
 
 **Máy Mac vừa Master vừa Worker:**
 ```bash
-# Start tất cả (master + 1 worker)
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 kafka zookeeper jupyter-notebook
+# Start tất cả (master + 1 worker + HDFS)
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 jupyter-notebook
 
 # Hoặc thêm nhiều workers
 docker compose -f docker-compose.cluster.yml up -d spark-worker-2 spark-worker-3
@@ -97,27 +97,34 @@ Truy cập: `http://<MASTER_IP>:8080` để xem workers đã kết nối
 **Services:**
 - Spark Master UI: `http://[MASTER_IP]:8080`
 - Spark Worker UIs: `http://[WORKER_IP]:8081`, `8082`, `8083`, ...
+- HDFS NameNode UI: `http://[MASTER_IP]:9870`
 - Jupyter Lab: `http://[MASTER_IP]:8888`
-- Kafka UI: `http://[MASTER_IP]:8090`
 - API Server: `http://[MASTER_IP]:5001`
 
 ## Data Pipeline
 
-### 1. Kafka Topics
+### 1. Upload Data to HDFS
+
+**Lần đầu tiên**, upload CSV files lên HDFS:
 
 ```bash
-docker exec -it kafka bash
-kafka-topics --create --topic book-ratings --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-kafka-topics --list --bootstrap-server localhost:9092
+# Start HDFS services
+docker compose -f docker-compose.cluster.yml up -d namenode datanode-1
+
+# Wait for HDFS to be ready (check http://[MASTER_IP]:9870)
+
+# Upload CSV files to HDFS
+chmod +x scripts/upload_to_hdfs.sh
+./scripts/upload_to_hdfs.sh
 ```
 
-### 2. Preprocessing
+### 3. Preprocessing
 
 ```bash
 docker exec spark-master python3 /opt/scripts/run_preprocessing.py
 ```
 
-### 3. Train Models
+### 4. Train Models
 
 **Lưu ý**: Code đã tự động config driver ports (35000, 35001) qua `SparkConfig.create_spark_session()`, không cần thêm `--conf`.
 
@@ -181,7 +188,7 @@ docker compose -f docker-compose.cluster.yml stop spark-worker
 **Mac (có data):**
 ```bash
 # .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master kafka zookeeper jupyter-notebook
+docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 jupyter-notebook
 ```
 
 **Windows:**
@@ -194,7 +201,7 @@ docker compose -f docker-compose.cluster.yml up -d spark-worker-1
 **Mac:**
 ```bash
 # .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 kafka zookeeper jupyter-notebook
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 jupyter-notebook
 ```
 
 **Windows:**
