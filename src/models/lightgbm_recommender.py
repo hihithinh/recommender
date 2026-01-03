@@ -1,5 +1,8 @@
 from pyspark.sql import DataFrame
 from pyspark.ml.feature import VectorAssembler
+from pyspark.ml.linalg import Vectors, VectorUDT
+from pyspark.sql.functions import udf, col, concat
+from pyspark.sql.types import ArrayType, DoubleType
 from typing import List, Dict, Any
 import os
 
@@ -30,84 +33,150 @@ class LightGBMRecommender:
         self.bagging_freq = bagging_freq
         self.min_data_in_leaf = min_data_in_leaf
         self.model = None
-        self.feature_cols = None
     
     def prepare_features(
         self,
         df: DataFrame,
-        feature_cols: List[str],
         label_col: str = "rating"
     ) -> DataFrame:
         
-        self.feature_cols = feature_cols
+        from pyspark.ml.linalg import DenseVector, SparseVector
+        
+        def vector_to_array_func(v):
+            if v is None:
+                return None
+            elif isinstance(v, (DenseVector, SparseVector)):
+                return v.toArray().tolist()
+            elif isinstance(v, list):
+                return v
+            else:
+                return list(v)
+        
+        vector_to_array = udf(vector_to_array_func, ArrayType(DoubleType()))
+        
+        df_with_arrays = df \
+            .withColumn("user_features_array", vector_to_array(col("user_features"))) \
+            .withColumn("item_features_array", vector_to_array(col("item_features")))
+        
+        # Use all 50 dimensions from ALS embeddings
+        for i in range(50):
+            df_with_arrays = df_with_arrays.withColumn(f"user_f{i}", col("user_features_array")[i])
+        
+        for i in range(50):
+            df_with_arrays = df_with_arrays.withColumn(f"item_f{i}", col("item_features_array")[i])
+        
+        feature_cols = [f"user_f{i}" for i in range(50)] + [f"item_f{i}" for i in range(50)]
         
         assembler = VectorAssembler(
             inputCols=feature_cols,
             outputCol="features"
         )
         
-        df_features = assembler.transform(df)
+        df_features = assembler.transform(df_with_arrays)
         
         return df_features.select("features", label_col)
     
-    def train(self, train_df: DataFrame, feature_cols: List[str], label_col: str = "rating"):
+    def train(self, train_df: DataFrame, label_col: str = "rating"):
         
-        try:
-            from synapse.ml.lightgbm import LightGBMRegressor
-        except ImportError:
-            print("Warning: SynapseML LightGBM not available. Using placeholder.")
-            print("Install with: pip install synapseml")
-            return None
+        import lightgbm as lgb
+        import pandas as pd
+        import numpy as np
+        from pyspark.ml.linalg import DenseVector, SparseVector
         
-        train_features = self.prepare_features(train_df, feature_cols, label_col)
+        train_features = self.prepare_features(train_df, label_col)
         
-        lgbm = LightGBMRegressor(
-            numLeaves=self.num_leaves,
-            maxDepth=self.max_depth,
-            learningRate=self.learning_rate,
-            numIterations=self.num_iterations,
-            objective=self.objective,
-            metric=self.metric,
-            featureFraction=self.feature_fraction,
-            baggingFraction=self.bagging_fraction,
-            baggingFreq=self.bagging_freq,
-            minDataInLeaf=self.min_data_in_leaf,
-            labelCol=label_col,
-            featuresCol="features",
-            predictionCol="prediction"
+        train_pd = train_features.select("features", label_col).toPandas()
+        
+        def convert_vector(v):
+            if isinstance(v, (DenseVector, SparseVector)):
+                return v.toArray().tolist()
+            elif isinstance(v, list):
+                return v
+            else:
+                return list(v)
+        
+        X_train = pd.DataFrame([convert_vector(v) for v in train_pd['features']]).astype(np.float64)
+        y_train = train_pd[label_col].astype(np.float64)
+        
+        params = {
+            'objective': self.objective,
+            'metric': self.metric,
+            'num_leaves': self.num_leaves,
+            'max_depth': self.max_depth,
+            'learning_rate': self.learning_rate,
+            'feature_fraction': self.feature_fraction,
+            'bagging_fraction': self.bagging_fraction,
+            'bagging_freq': self.bagging_freq,
+            'min_data_in_leaf': self.min_data_in_leaf,
+            'verbose': -1
+        }
+        
+        train_data = lgb.Dataset(X_train, label=y_train)
+        
+        self.model = lgb.train(
+            params,
+            train_data,
+            num_boost_round=self.num_iterations
         )
-        
-        self.model = lgbm.fit(train_features)
         
         return self.model
     
     def predict(self, test_df: DataFrame) -> DataFrame:
         
+        import pandas as pd
+        import numpy as np
+        from pyspark.sql.functions import lit
+        from pyspark.ml.linalg import DenseVector, SparseVector
+        
         if self.model is None:
             raise ValueError("Model has not been trained yet. Call train() first.")
         
-        if self.feature_cols is None:
-            raise ValueError("Feature columns not set. Train the model first.")
+        test_features = self.prepare_features(test_df, label_col="rating")
         
-        test_features = self.prepare_features(test_df, self.feature_cols)
+        test_pd = test_features.select("features", "rating").toPandas()
         
-        predictions = self.model.transform(test_features)
+        def convert_vector(v):
+            if isinstance(v, (DenseVector, SparseVector)):
+                return v.toArray().tolist()
+            elif isinstance(v, list):
+                return v
+            else:
+                return list(v)
         
-        return predictions
+        X_test = pd.DataFrame([convert_vector(v) for v in test_pd['features']]).astype(np.float64)
+        
+        predictions_array = self.model.predict(X_test)
+        
+        test_pd['prediction'] = predictions_array
+        
+        predictions_df = test_df.sql_ctx.createDataFrame(test_pd)
+        
+        return predictions_df
+    
+    def evaluate(self, predictions: DataFrame, metric: str = "rmse") -> float:
+        
+        from pyspark.ml.evaluation import RegressionEvaluator
+        
+        evaluator = RegressionEvaluator(
+            labelCol="rating",
+            predictionCol="prediction",
+            metricName=metric
+        )
+        
+        score = evaluator.evaluate(predictions)
+        
+        return score
     
     def save_model(self, path: str):
         
         if self.model is None:
             raise ValueError("Model has not been trained yet.")
         
-        self.model.write().overwrite().save(path)
+        self.model.save_model(path)
         print(f"Model saved to {path}")
     
     def load_model(self, path: str):
         
-        try:
-            from synapse.ml.lightgbm import LightGBMRegressionModel
-            self.model = LightGBMRegressionModel.load(path)
-            print(f"Model loaded from {path}")
-        except ImportError:
-            print("Error: SynapseML LightGBM not available.")
+        import lightgbm as lgb
+        self.model = lgb.Booster(model_file=path)
+        print(f"Model loaded from {path}")

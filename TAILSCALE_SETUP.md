@@ -167,11 +167,11 @@ cd ~/recommender
 source .env
 
 # Build và start master
-docker-compose -f docker-compose.distributed.yml build spark-master jupyter
+docker compose -f docker-compose.distributed.yml build spark-master jupyter
 
 # Start services với Tailscale IP
 export SPARK_MASTER_HOST=100.101.102.103
-docker-compose -f docker-compose.distributed.yml up -d spark-master jupyter
+docker compose -f docker-compose.distributed.yml up -d spark-master jupyter
 
 # Kiểm tra
 docker logs spark-master
@@ -186,7 +186,7 @@ cd ~/recommender
 source .env
 
 # Build worker
-docker-compose -f docker-compose.distributed.yml build spark-worker
+docker compose -f docker-compose.distributed.yml build spark-worker
 
 # Start worker với Tailscale IPs
 export SPARK_MASTER_HOST=100.101.102.103
@@ -195,7 +195,7 @@ export SPARK_WORKER_CORES=4
 export SPARK_WORKER_MEMORY=8g
 export HOSTNAME=worker-1
 
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 
 # Kiểm tra
 docker logs spark-worker
@@ -213,7 +213,7 @@ export SPARK_WORKER_CORES=4
 export SPARK_WORKER_MEMORY=8g
 export HOSTNAME=worker-2
 
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 ```
 
 ## Bước 6: Truy cập Services

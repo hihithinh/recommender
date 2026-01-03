@@ -32,9 +32,9 @@ curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 sudo usermod -aG docker $USER
 
-# 2. Cài đặt Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/download/v2.23.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+# 2. Cài đặt Docker Compose Plugin (v2)
+sudo apt-get update
+sudo apt-get install docker-compose-plugin
 
 # 3. Tạo thư mục shared
 sudo mkdir -p /mnt/shared/{data,raw_data,logs}
@@ -139,14 +139,14 @@ nano .env
 # SPARK_MASTER_HOST=192.168.1.100
 
 # Build images
-docker-compose -f docker-compose.distributed.yml build spark-master jupyter
+docker compose -f docker-compose.distributed.yml build spark-master jupyter
 
 # Start services
 export SPARK_MASTER_HOST=192.168.1.100
-docker-compose -f docker-compose.distributed.yml up -d spark-master jupyter
+docker compose -f docker-compose.distributed.yml up -d spark-master jupyter
 
 # Kiểm tra logs
-docker-compose -f docker-compose.distributed.yml logs -f spark-master
+docker compose -f docker-compose.distributed.yml logs -f spark-master
 ```
 
 ### Trên Worker Node 1 (192.168.1.101):
@@ -155,7 +155,7 @@ docker-compose -f docker-compose.distributed.yml logs -f spark-master
 cd ~/recommender
 
 # Build image
-docker-compose -f docker-compose.distributed.yml build spark-worker
+docker compose -f docker-compose.distributed.yml build spark-worker
 
 # Start worker
 export SPARK_MASTER_HOST=192.168.1.100
@@ -164,10 +164,10 @@ export SPARK_WORKER_CORES=4
 export SPARK_WORKER_MEMORY=8g
 export HOSTNAME=worker-1
 
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 
 # Kiểm tra logs
-docker-compose -f docker-compose.distributed.yml logs -f spark-worker
+docker compose -f docker-compose.distributed.yml logs -f spark-worker
 ```
 
 ### Trên Worker Node 2 (192.168.1.102):
@@ -182,10 +182,10 @@ export SPARK_WORKER_CORES=4
 export SPARK_WORKER_MEMORY=8g
 export HOSTNAME=worker-2
 
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 
 # Kiểm tra logs
-docker-compose -f docker-compose.distributed.yml logs -f spark-worker
+docker compose -f docker-compose.distributed.yml logs -f spark-worker
 ```
 
 ## Bước 6: Kiểm tra Cluster
@@ -252,7 +252,7 @@ telnet 192.168.1.100 7077
 docker logs spark-worker
 
 # Restart worker
-docker-compose -f docker-compose.distributed.yml restart spark-worker
+docker compose -f docker-compose.distributed.yml restart spark-worker
 ```
 
 ### Out of Memory
@@ -260,7 +260,7 @@ docker-compose -f docker-compose.distributed.yml restart spark-worker
 ```bash
 # Tăng worker memory
 export SPARK_WORKER_MEMORY=16g
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 
 # Hoặc giảm executor memory trong spark-submit
 --executor-memory 2g
@@ -292,13 +292,13 @@ export SPARK_WORKER_CORES=4
 export SPARK_WORKER_MEMORY=8g
 export HOSTNAME=worker-3
 
-docker-compose -f docker-compose.distributed.yml up -d spark-worker
+docker compose -f docker-compose.distributed.yml up -d spark-worker
 ```
 
 ### Xóa Worker:
 
 ```bash
-docker-compose -f docker-compose.distributed.yml down spark-worker
+docker compose -f docker-compose.distributed.yml down spark-worker
 ```
 
 ## Backup và Recovery

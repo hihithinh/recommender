@@ -1,4 +1,4 @@
-FROM bitnami/spark:3.5.0
+FROM apache/spark:python3
 
 USER root
 
@@ -21,4 +21,5 @@ ENV PYSPARK_DRIVER_PYTHON=python3
 
 EXPOSE 8081 7000-7100
 
-CMD ["/opt/bitnami/scripts/spark/run.sh"]
+# Use shell form to allow environment variable expansion
+CMD /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker ${SPARK_MASTER_URL}

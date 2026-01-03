@@ -1,4 +1,4 @@
-FROM bitnami/spark:3.5.0
+FROM apache/spark:python3
 
 USER root
 
@@ -24,4 +24,4 @@ ENV PYSPARK_DRIVER_PYTHON=python3
 
 EXPOSE 8080 7077 6066
 
-CMD ["/opt/bitnami/scripts/spark/run.sh"]
+CMD ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   spark-master:
     build:
@@ -116,32 +114,50 @@ services:
     networks:
       - spark-network
 
-  jupyter:
+  jupyter-notebook:
     build:
       context: ./docker/jupyter
       dockerfile: Dockerfile
     container_name: jupyter-notebook
-    hostname: jupyter
-    depends_on:
-      - spark-master
-    environment:
-      - JUPYTER_ENABLE_LAB=yes
-      - SPARK_MASTER_URL=spark://spark-master:7077
     ports:
-      - "8888:8888"  # Jupyter Notebook
-      - "4040:4040"  # Spark Application UI
+      - "8888:8888"
     volumes:
-      - ./data:/opt/spark-data
-      - ./raw_data:/opt/raw-data
-      - ./src:/opt/spark-apps
-      - ./scripts:/opt/scripts
-      - ./notebooks:/opt/notebooks
-      - ./logs:/opt/logs
+      - ./data:/home/jovyan/data
+      - ./notebooks:/home/jovyan/notebooks
+      - ./src:/home/jovyan/src
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - JUPYTER_ENABLE_LAB=yes
     networks:
       - spark-network
-    command: >
-      bash -c "jupyter lab --ip=0.0.0.0 --port=8888 --no-browser 
-      --allow-root --NotebookApp.token='' --NotebookApp.password=''"
+    depends_on:
+      - spark-master
+
+  api-server:
+    build:
+      context: ./docker/api-server
+      dockerfile: Dockerfile
+    container_name: api-server
+    ports:
+      - "5001:5000"
+    volumes:
+      - ./src:/opt/spark-apps
+      - ./data:/opt/spark-data
+      - ./raw_data:/opt/raw-data
+      - ./templates:/opt/spark-apps/templates
+      - ./static:/opt/spark-apps/static
+    environment:
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - DATA_PATH=/opt/spark-data
+      - MODEL_PATH=/opt/spark-data/models
+      - PYTHONPATH=/opt/spark-apps
+    networks:
+      - spark-network
+    depends_on:
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+      - spark-worker-3
 
 networks:
   spark-network:
