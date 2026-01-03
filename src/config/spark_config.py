@@ -28,6 +28,8 @@ class SparkConfig:
                 .config("spark.driver.memory", driver_memory)
                 .config("spark.driver.host", driver_host)
                 .config("spark.driver.bindAddress", "0.0.0.0")
+                .config("spark.driver.port", "35000")
+                .config("spark.driver.blockManager.port", "35001")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")

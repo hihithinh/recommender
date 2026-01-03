@@ -114,24 +114,26 @@ kafka-topics --list --bootstrap-server localhost:9092
 ### 2. Preprocessing
 
 ```bash
-docker exec spark-master spark-submit \
-  --master spark://<MASTER_IP>:7077 \
-  /opt/scripts/run_preprocessing.py
+docker exec spark-master python3 /opt/scripts/run_preprocessing.py
 ```
 
 ### 3. Train Models
 
+**Lưu ý**: Code đã tự động config driver ports (35000, 35001) qua `SparkConfig.create_spark_session()`, không cần thêm `--conf`.
+
 ```bash
 # ALS Model
+docker exec spark-master python3 /opt/spark-apps/training/train_als.py
+
+# LightGBM Model  
+docker exec spark-master python3 /opt/spark-apps/training/train_lightgbm.py
+```
+
+**Hoặc dùng spark-submit** (nếu cần custom config):
+```bash
 docker exec spark-master spark-submit \
   --master spark://<MASTER_IP>:7077 \
   /opt/spark-apps/training/train_als.py
-
-# LightGBM Model
-docker exec spark-master spark-submit \
-  --master spark://<MASTER_IP>:7077 \
-  --packages com.microsoft.azure:synapseml_2.12:0.11.3 \
-  /opt/spark-apps/training/train_lightgbm.py
 ```
 
 ## Monitoring

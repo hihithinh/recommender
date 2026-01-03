@@ -29,7 +29,8 @@ services:
       - "7077:7077"  # Spark Master Port
       - "6066:6066"  # Spark Master REST API
       - "4040:4040"  # Spark Application UI
-      - "35000-35100:35000-35100"  # Driver ports for distributed jobs
+      - "35000:35000"  # Driver RPC port
+      - "35001:35001"  # Driver BlockManager port
     volumes:
       - ./data:/opt/spark-data
       - ./raw_data:/opt/raw-data
