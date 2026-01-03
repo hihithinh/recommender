@@ -51,12 +51,13 @@ nano .env  # hoặc notepad .env trên Windows
 
 **Điền các giá trị:**
 ```bash
-THIS_MACHINE_IP=100.x.x.x        # IP của máy này
-MASTER_TAILSCALE_IP=100.y.y.y    # IP của máy chạy Master
-WORKER_ID=1                       # ID của worker (1, 2, 3, ...)
+THIS_MACHINE_IP=100.x.x.x        # IP của máy này (tailscale ip -4)
+MASTER_TAILSCALE_IP=100.y.y.y    # IP của máy chạy Master (QUAN TRỌNG!)
 SPARK_WORKER_CORES=4              # Số cores cho worker
 SPARK_WORKER_MEMORY=8g            # RAM cho worker
 ```
+
+**⚠️ LƯU Ý QUAN TRỌNG**: `MASTER_TAILSCALE_IP` phải là Tailscale IP thật của máy master, không phải `localhost` hay `127.0.0.1`. Dùng lệnh `tailscale ip -4` trên máy master để lấy IP.
 
 ### 4. Chạy Services
 

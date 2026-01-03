@@ -17,12 +17,17 @@ class SparkConfig:
         if master is None:
             master = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
         
+        # Get driver host for distributed setup
+        driver_host = os.getenv("SPARK_DRIVER_HOST", "spark-master")
+        
         spark = (SparkSession.builder
                 .appName(app_name)
                 .master(master)
                 .config("spark.executor.memory", executor_memory)
                 .config("spark.executor.cores", executor_cores)
                 .config("spark.driver.memory", driver_memory)
+                .config("spark.driver.host", driver_host)
+                .config("spark.driver.bindAddress", "0.0.0.0")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
