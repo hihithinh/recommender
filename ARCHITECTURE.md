@@ -55,7 +55,7 @@ Raw Data (CSV) → Preprocessing → Parquet (Data Lake)
 - Location: `src/streaming/` (nếu có)
 
 **Batch Upload** (Historical data)
-- Raw CSV files: `./raw_data/`
+- Raw CSV files: `./data/raw/`
   - `BX-Book-Ratings.csv`
   - `BX-Users.csv`
   - `BX-Books.csv`
@@ -78,10 +78,10 @@ Raw Data (CSV) → Preprocessing → Parquet (Data Lake)
 ```python
 # src/config/spark_config.py
 {
-    "raw_data": "/opt/raw-data",
-    "processed_data": "/opt/spark-data/processed",
-    "embeddings": "/opt/spark-data/embeddings",
-    "models": "/opt/spark-data/models"
+    "raw_data": "hdfs://{master_ip}:9000/data/raw",
+    "processed_data": "hdfs://{master_ip}:9000/data/processed",
+    "embeddings": "hdfs://{master_ip}:9000/data/embeddings",
+    "models": "hdfs://{master_ip}:9000/data/models"
 }
 ```
 
@@ -382,7 +382,7 @@ Centralized logging configuration.
       ├── als_model/             # Spark ALS model
       └── lightgbm_model/        # LightGBM model
 
-./raw_data/                      # Raw CSV files
+./data/raw/                      # Raw CSV files
   ├── BX-Book-Ratings.csv
   ├── BX-Users.csv
   └── BX-Books.csv
@@ -398,9 +398,11 @@ Centralized logging configuration.
 # Spark Master & API Server
 volumes:
   - ./data:/opt/spark-data           # Processed data, models
-  - ./raw_data:/opt/raw-data         # Raw CSV files
+  - ./data:/data                     # Parquet files (readable from host)
+  - ./data/raw:/opt/raw-data         # Raw CSV files
   - ./src:/opt/spark-apps            # Source code
   - ./scripts:/opt/scripts           # Helper scripts
+  - ./hdfs:/hadoop/dfs               # HDFS internal data
 
 # Spark Workers
 volumes:
@@ -417,8 +419,8 @@ volumes:
 
 ### Training Phase
 
-1. **Upload data** → `./raw_data/`
-2. **Preprocessing** → `docker exec spark-master spark-submit /opt/scripts/run_preprocessing.py`
+1. **Upload data** → `./data/raw/` (then upload to HDFS with `./scripts/upload_to_hdfs.sh`)
+2. **Preprocessing** → `docker exec spark-master python3 /opt/scripts/run_preprocessing.py`
 3. **Train ALS** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_als.py`
 4. **Train LightGBM** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_lightgbm.py`
 5. **Models saved** → `./data/models/`

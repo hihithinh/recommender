@@ -18,8 +18,9 @@ class SparkConfig:
             master = os.getenv("SPARK_MASTER_URL", "spark://spark-master:7077")
         
         # Get driver host for distributed setup
-        driver_host = os.getenv("SPARK_DRIVER_HOST", "spark-master")
         master_ip = os.getenv("MASTER_TAILSCALE_IP", "namenode")
+        # Driver host: advertise Tailscale IP to workers, but bind on all interfaces
+        driver_host = os.getenv("SPARK_DRIVER_HOST", master_ip)
         
         spark = (SparkSession.builder
                 .appName(app_name)
@@ -32,13 +33,15 @@ class SparkConfig:
                 .config("spark.driver.port", "35000")
                 .config("spark.driver.blockManager.port", "35001")
                 .config("spark.hadoop.fs.defaultFS", f"hdfs://{master_ip}:9000")
+                .config("spark.hadoop.dfs.replication", "1")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
                 .config("spark.sql.parquet.compression.codec", "snappy")
                 .config("spark.sql.shuffle.partitions", "200")
                 .config("spark.default.parallelism", "200")
-                .config("spark.network.timeout", "600s")
+                .config("spark.network.timeout", "800s")
+                .config("spark.rpc.askTimeout", "600s")
                 .config("spark.executor.heartbeatInterval", "60s")
                 .getOrCreate())
         

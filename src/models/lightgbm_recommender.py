@@ -172,11 +172,66 @@ class LightGBMRecommender:
         if self.model is None:
             raise ValueError("Model has not been trained yet.")
         
-        self.model.save_model(path)
-        print(f"Model saved to {path}")
+        # LightGBM cannot write directly to HDFS
+        # Save to local temp path first, then copy to HDFS if needed
+        import os
+        import subprocess
+        
+        if path.startswith("hdfs://"):
+            # Extract HDFS path and save to local temp
+            local_temp_path = "/tmp/lightgbm_model.txt"
+            self.model.save_model(local_temp_path)
+            print(f"Model saved to local temp: {local_temp_path}")
+            
+            # Copy to HDFS using hadoop fs command
+            try:
+                subprocess.run(
+                    ["hadoop", "fs", "-put", "-f", local_temp_path, path],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"Model copied to HDFS: {path}")
+                
+                # Clean up local temp file
+                os.remove(local_temp_path)
+            except subprocess.CalledProcessError as e:
+                print(f"Error copying to HDFS: {e.stderr}")
+                raise
+        else:
+            # Save directly to local filesystem
+            self.model.save_model(path)
+            print(f"Model saved to {path}")
     
     def load_model(self, path: str):
         
         import lightgbm as lgb
-        self.model = lgb.Booster(model_file=path)
-        print(f"Model loaded from {path}")
+        import os
+        import subprocess
+        
+        if path.startswith("hdfs://"):
+            # Download from HDFS to local temp first
+            local_temp_path = "/tmp/lightgbm_model_load.txt"
+            
+            try:
+                subprocess.run(
+                    ["hadoop", "fs", "-get", "-f", path, local_temp_path],
+                    check=True,
+                    capture_output=True,
+                    text=True
+                )
+                print(f"Model downloaded from HDFS to: {local_temp_path}")
+                
+                # Load from local temp
+                self.model = lgb.Booster(model_file=local_temp_path)
+                print(f"Model loaded from {path}")
+                
+                # Clean up local temp file
+                os.remove(local_temp_path)
+            except subprocess.CalledProcessError as e:
+                print(f"Error downloading from HDFS: {e.stderr}")
+                raise
+        else:
+            # Load directly from local filesystem
+            self.model = lgb.Booster(model_file=path)
+            print(f"Model loaded from {path}")

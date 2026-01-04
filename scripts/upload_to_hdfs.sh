@@ -10,9 +10,9 @@ docker exec namenode hadoop fs -mkdir -p /data/embeddings
 docker exec namenode hadoop fs -mkdir -p /data/models
 
 echo "Uploading CSV files to HDFS..."
-docker cp ./raw_data/BX-Book-Ratings.csv namenode:/tmp/
-docker cp ./raw_data/BX-Users.csv namenode:/tmp/
-docker cp ./raw_data/BX_Books.csv namenode:/tmp/
+docker cp ./data/raw/BX-Book-Ratings.csv namenode:/tmp/
+docker cp ./data/raw/BX-Users.csv namenode:/tmp/
+docker cp ./data/raw/BX_Books.csv namenode:/tmp/
 
 docker exec namenode hadoop fs -put -f /tmp/BX-Book-Ratings.csv /data/raw/
 docker exec namenode hadoop fs -put -f /tmp/BX-Users.csv /data/raw/
