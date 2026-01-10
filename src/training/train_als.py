@@ -55,19 +55,23 @@ def train_als_model(spark: SparkSession):
     
     logger.info("Evaluating on validation set...")
     val_predictions = als_recommender.predict(validation_df)
-    val_rmse = als_recommender.evaluate(val_predictions, metric="rmse")
-    val_mae = als_recommender.evaluate(val_predictions, metric="mae")
+    val_metrics = als_recommender.evaluate_comprehensive(validation_df, val_predictions)
     
-    logger.info(f"Validation RMSE: {val_rmse:.4f}")
-    logger.info(f"Validation MAE: {val_mae:.4f}")
+    logger.info("Validation Metrics:")
+    logger.info(f"  RMSE: {val_metrics['rmse']:.4f}")
+    logger.info(f"  MAE: {val_metrics['mae']:.4f}")
+    logger.info(f"  R2: {val_metrics['r2']:.4f}")
+    logger.info(f"  Explained Variance: {val_metrics['var']:.4f}")
     
     logger.info("Evaluating on test set...")
     test_predictions = als_recommender.predict(test_df)
-    test_rmse = als_recommender.evaluate(test_predictions, metric="rmse")
-    test_mae = als_recommender.evaluate(test_predictions, metric="mae")
+    test_metrics = als_recommender.evaluate_comprehensive(test_df, test_predictions)
     
-    logger.info(f"Test RMSE: {test_rmse:.4f}")
-    logger.info(f"Test MAE: {test_mae:.4f}")
+    logger.info("Test Metrics:")
+    logger.info(f"  RMSE: {test_metrics['rmse']:.4f}")
+    logger.info(f"  MAE: {test_metrics['mae']:.4f}")
+    logger.info(f"  R2: {test_metrics['r2']:.4f}")
+    logger.info(f"  Explained Variance: {test_metrics['var']:.4f}")
     
     logger.info("Saving ALS model...")
     als_recommender.save_model(f"{paths['models']}/als_model")
@@ -76,10 +80,8 @@ def train_als_model(spark: SparkSession):
     logger.info("Next step: Run extract_als_embeddings.py to create embeddings for LightGBM")
     
     return {
-        "val_rmse": val_rmse,
-        "val_mae": val_mae,
-        "test_rmse": test_rmse,
-        "test_mae": test_mae
+        "validation": val_metrics,
+        "test": test_metrics
     }
 
 
@@ -89,9 +91,15 @@ if __name__ == "__main__":
     try:
         results = train_als_model(spark)
         print("\n" + "="*50)
-        print("Training Results:")
+        print("Training Results Summary:")
         print("="*50)
-        for key, value in results.items():
-            print(f"{key}: {value:.4f}")
+        
+        print("\nValidation Metrics:")
+        for key, value in results['validation'].items():
+            print(f"  {key}: {value:.4f}")
+        
+        print("\nTest Metrics:")
+        for key, value in results['test'].items():
+            print(f"  {key}: {value:.4f}")
     finally:
         spark.stop()

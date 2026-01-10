@@ -1,7 +1,7 @@
 from pyspark.sql import DataFrame
 from pyspark.ml.recommendation import ALS, ALSModel
 from pyspark.ml.evaluation import RegressionEvaluator
-from typing import Tuple, Dict, Any
+from typing import Dict
 import os
 
 
@@ -72,6 +72,25 @@ class ALSRecommender:
         score = evaluator.evaluate(predictions)
         
         return score
+    
+    def evaluate_comprehensive(self, test_df: DataFrame, predictions: DataFrame) -> Dict[str, float]:
+        """
+        Comprehensive evaluation with multiple metrics from als_deep_dive.ipynb:
+        - RMSE: Root Mean Squared Error
+        - MAE: Mean Absolute Error  
+        - R2: R-squared score
+        - Explained Variance: Explained variance score
+        
+        Reference: Notebook achieved RMSE=0.964, MAE=0.751, R2=0.266, Var=0.272
+        """
+        metrics = {}
+        
+        metrics['rmse'] = self.evaluate(predictions, metric='rmse')
+        metrics['mae'] = self.evaluate(predictions, metric='mae')
+        metrics['r2'] = self.evaluate(predictions, metric='r2')
+        metrics['var'] = self.evaluate(predictions, metric='var')
+        
+        return metrics
     
     def get_user_embeddings(self) -> DataFrame:
         

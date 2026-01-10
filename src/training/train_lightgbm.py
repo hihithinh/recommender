@@ -57,7 +57,8 @@ def train_lightgbm_model(spark: SparkSession):
         min_data_in_leaf=LightGBMConfig.MIN_DATA_IN_LEAF,
         bagging_fraction=LightGBMConfig.BAGGING_FRACTION,
         feature_fraction=LightGBMConfig.FEATURE_FRACTION,
-        objective=LightGBMConfig.OBJECTIVE
+        objective=LightGBMConfig.OBJECTIVE,
+        boosting_type=LightGBMConfig.BOOSTING_TYPE
     )
     
     logger.info("Training LightGBM model...")
@@ -65,23 +66,23 @@ def train_lightgbm_model(spark: SparkSession):
     
     logger.info("Evaluating on validation set...")
     val_predictions = lgbm_recommender.predict(validation_with_features)
-    val_rmse = lgbm_recommender.evaluate(val_predictions, metric="rmse")
-    val_mae = lgbm_recommender.evaluate(val_predictions, metric="mae")
-    val_r2 = lgbm_recommender.evaluate(val_predictions, metric="r2")
+    val_metrics = lgbm_recommender.evaluate_comprehensive(validation_with_features, val_predictions)
     
-    logger.info(f"Validation RMSE: {val_rmse:.4f}")
-    logger.info(f"Validation MAE: {val_mae:.4f}")
-    logger.info(f"Validation R2: {val_r2:.4f}")
+    logger.info("Validation Metrics:")
+    logger.info(f"  RMSE: {val_metrics['rmse']:.4f}")
+    logger.info(f"  MAE: {val_metrics['mae']:.4f}")
+    logger.info(f"  R2: {val_metrics['r2']:.4f}")
+    logger.info(f"  Explained Variance: {val_metrics['var']:.4f}")
     
     logger.info("Evaluating on test set...")
     test_predictions = lgbm_recommender.predict(test_with_features)
-    test_rmse = lgbm_recommender.evaluate(test_predictions, metric="rmse")
-    test_mae = lgbm_recommender.evaluate(test_predictions, metric="mae")
-    test_r2 = lgbm_recommender.evaluate(test_predictions, metric="r2")
+    test_metrics = lgbm_recommender.evaluate_comprehensive(test_with_features, test_predictions)
     
-    logger.info(f"Test RMSE: {test_rmse:.4f}")
-    logger.info(f"Test MAE: {test_mae:.4f}")
-    logger.info(f"Test R2: {test_r2:.4f}")
+    logger.info("Test Metrics:")
+    logger.info(f"  RMSE: {test_metrics['rmse']:.4f}")
+    logger.info(f"  MAE: {test_metrics['mae']:.4f}")
+    logger.info(f"  R2: {test_metrics['r2']:.4f}")
+    logger.info(f"  Explained Variance: {test_metrics['var']:.4f}")
     
     logger.info("Saving predictions...")
     save_parquet(val_predictions, f"{paths['processed_data']}/lgbm_val_predictions.parquet")
@@ -93,12 +94,8 @@ def train_lightgbm_model(spark: SparkSession):
     logger.info("LightGBM training completed successfully!")
     
     return {
-        "val_rmse": val_rmse,
-        "val_mae": val_mae,
-        "val_r2": val_r2,
-        "test_rmse": test_rmse,
-        "test_mae": test_mae,
-        "test_r2": test_r2
+        "validation": val_metrics,
+        "test": test_metrics
     }
 
 
@@ -108,9 +105,15 @@ if __name__ == "__main__":
     try:
         results = train_lightgbm_model(spark)
         print("\n" + "="*50)
-        print("Training Results:")
+        print("Training Results Summary:")
         print("="*50)
-        for key, value in results.items():
-            print(f"{key}: {value:.4f}")
+        
+        print("\nValidation Metrics:")
+        for key, value in results['validation'].items():
+            print(f"  {key}: {value:.4f}")
+        
+        print("\nTest Metrics:")
+        for key, value in results['test'].items():
+            print(f"  {key}: {value:.4f}")
     finally:
         spark.stop()

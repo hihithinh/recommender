@@ -11,16 +11,17 @@ class LightGBMRecommender:
     
     def __init__(
         self,
-        num_leaves: int = 31,
+        num_leaves: int = 32,
         max_depth: int = -1,
-        learning_rate: float = 0.05,
-        num_iterations: int = 100,
+        learning_rate: float = 0.1,
+        num_iterations: int = 50,
         objective: str = "regression",
         metric: str = "rmse",
         feature_fraction: float = 0.8,
         bagging_fraction: float = 0.8,
         bagging_freq: int = 5,
-        min_data_in_leaf: int = 20
+        min_data_in_leaf: int = 20,
+        boosting_type: str = "gbdt"
     ):
         self.num_leaves = num_leaves
         self.max_depth = max_depth
@@ -32,6 +33,7 @@ class LightGBMRecommender:
         self.bagging_fraction = bagging_fraction
         self.bagging_freq = bagging_freq
         self.min_data_in_leaf = min_data_in_leaf
+        self.boosting_type = boosting_type
         self.model = None
     
     def prepare_features(
@@ -101,6 +103,7 @@ class LightGBMRecommender:
         params = {
             'objective': self.objective,
             'metric': self.metric,
+            'boosting_type': self.boosting_type,
             'num_leaves': self.num_leaves,
             'max_depth': self.max_depth,
             'learning_rate': self.learning_rate,
@@ -166,6 +169,23 @@ class LightGBMRecommender:
         score = evaluator.evaluate(predictions)
         
         return score
+    
+    def evaluate_comprehensive(self, test_df: DataFrame, predictions: DataFrame) -> Dict[str, float]:
+        """
+        Comprehensive evaluation with multiple metrics:
+        - RMSE: Root Mean Squared Error
+        - MAE: Mean Absolute Error
+        - R2: R-squared score
+        - Explained Variance: Explained variance score
+        """
+        metrics = {}
+        
+        metrics['rmse'] = self.evaluate(predictions, metric='rmse')
+        metrics['mae'] = self.evaluate(predictions, metric='mae')
+        metrics['r2'] = self.evaluate(predictions, metric='r2')
+        metrics['var'] = self.evaluate(predictions, metric='var')
+        
+        return metrics
     
     def save_model(self, path: str):
         
