@@ -69,20 +69,11 @@ def train_als_model(spark: SparkSession):
     logger.info(f"Test RMSE: {test_rmse:.4f}")
     logger.info(f"Test MAE: {test_mae:.4f}")
     
-    logger.info("Extracting user and item embeddings...")
-    user_embeddings = als_recommender.get_user_embeddings()
-    item_embeddings = als_recommender.get_item_embeddings()
-    
-    logger.info(f"User embeddings count: {user_embeddings.count()}")
-    logger.info(f"Item embeddings count: {item_embeddings.count()}")
-    
-    save_parquet(user_embeddings, f"{paths['embeddings']}/als_user_embeddings.parquet")
-    save_parquet(item_embeddings, f"{paths['embeddings']}/als_item_embeddings.parquet")
-    
     logger.info("Saving ALS model...")
     als_recommender.save_model(f"{paths['models']}/als_model")
     
     logger.info("ALS training completed successfully!")
+    logger.info("Next step: Run extract_als_embeddings.py to create embeddings for LightGBM")
     
     return {
         "val_rmse": val_rmse,

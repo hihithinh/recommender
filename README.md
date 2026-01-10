@@ -63,7 +63,8 @@ SPARK_WORKER_MEMORY=8g            # RAM cho worker
 
 **Trên máy chạy Master (có data):**
 ```bash
-docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 jupyter-notebook api-server
+# Start all master services including 3 datanodes for fault tolerance
+docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 datanode-2 datanode-3 jupyter-notebook api-server
 ```
 
 **Trên máy chạy Worker (bất kỳ máy nào):**
@@ -83,8 +84,8 @@ docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2
 
 **Máy Mac vừa Master vừa Worker:**
 ```bash
-# Start tất cả (master + 1 worker + HDFS)
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 jupyter-notebook
+# Start tất cả (master + 1 worker + HDFS with 3 datanodes)
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
 
 # Hoặc thêm nhiều workers
 docker compose -f docker-compose.cluster.yml up -d spark-worker-2 spark-worker-3
@@ -103,38 +104,79 @@ Truy cập: `http://<MASTER_IP>:8080` để xem workers đã kết nối
 
 ## Data Pipeline
 
+**Pipeline phải chạy tuần tự theo thứ tự sau:**
+
 ### 1. Upload Data to HDFS
 
 **Lần đầu tiên**, upload CSV files lên HDFS:
 
 ```bash
-# Start HDFS services
-docker compose -f docker-compose.cluster.yml up -d namenode datanode-1
+# Start HDFS services with 3 datanodes for replication
+docker compose -f docker-compose.cluster.yml up -d namenode datanode-1 datanode-2 datanode-3
 
-# Wait for HDFS to be ready (check http://[MASTER_IP]:9870)
+# Wait for HDFS to exit safe mode (30-60 seconds)
+docker exec namenode hdfs dfsadmin -safemode wait
+
+# Verify all datanodes are live
+docker exec namenode hdfs dfsadmin -report
+# Should show: Live datanodes (3)
 
 # Upload CSV files to HDFS
 chmod +x scripts/upload_to_hdfs.sh
 ./scripts/upload_to_hdfs.sh
+
+# Set replication factor to 2 (chỉ cần chạy 1 lần duy nhất)
+docker exec namenode hdfs dfs -setrep -R 2 /data/raw/
+
+# Verify replication
+docker exec namenode hdfs fsck /data/raw/ -files -blocks -locations
+# Should show: Average block replication: 2.0
 ```
 
-### 3. Preprocessing
+### 2. Preprocessing (Tạo data cho ALS)
+
+**Mục đích**: Clean và index data từ CSV, tạo `ratings.parquet` cho ALS training.
 
 ```bash
 docker exec spark-master python3 /opt/scripts/run_preprocessing.py
 ```
 
-### 4. Train Models
+**Output**: `/data/processed/ratings.parquet`, `/data/processed/users.parquet`, `/data/processed/books.parquet`
+
+### 3. Train ALS Model
+
+**Mục đích**: Train ALS model và tạo train/val/test splits.
 
 **Lưu ý**: Code đã tự động config driver ports (35000, 35001) qua `SparkConfig.create_spark_session()`, không cần thêm `--conf`.
 
 ```bash
-# ALS Model
 docker exec spark-master python3 /opt/spark-apps/training/train_als.py
+```
 
-# LightGBM Model  
+**Output**: 
+- ALS model: `/models/als_model`
+- Splits: `/data/processed/train_ratings.parquet`, `validation_ratings.parquet`, `test_ratings.parquet`
+
+### 4. Extract ALS Embeddings (Tạo features cho LightGBM)
+
+**Mục đích**: Load ALS model đã train và extract user/item embeddings.
+
+```bash
+docker exec spark-master python3 /opt/scripts/extract_als_embeddings.py
+```
+
+**Output**: 
+- Embeddings: `/data/embeddings/als_user_embeddings.parquet`, `als_item_embeddings.parquet`
+
+### 5. Train LightGBM Model (Sử dụng ALS embeddings)
+
+**Mục đích**: Train LightGBM model sử dụng ALS embeddings làm features.
+
+```bash
 docker exec spark-master python3 /opt/spark-apps/training/train_lightgbm.py
 ```
+
+**Output**: LightGBM model: `/models/lightgbm_model`
 
 **Hoặc dùng spark-submit** (nếu cần custom config):
 ```bash
@@ -188,7 +230,7 @@ docker compose -f docker-compose.cluster.yml stop spark-worker
 **Mac (có data):**
 ```bash
 # .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 jupyter-notebook
+docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
 ```
 
 **Windows:**
@@ -201,7 +243,7 @@ docker compose -f docker-compose.cluster.yml up -d spark-worker-1
 **Mac:**
 ```bash
 # .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 jupyter-notebook
+docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
 ```
 
 **Windows:**

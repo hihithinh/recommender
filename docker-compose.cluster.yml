@@ -165,14 +165,15 @@ services:
       - "8020:8020"  # HDFS RPC alternative port
     environment:
       - CLUSTER_NAME=spark-hdfs
-      - CORE_CONF_fs_defaultFS=hdfs://0.0.0.0:9000
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
       - CORE_CONF_hadoop_http_staticuser_user=root
-      - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_replication=2
       - HDFS_CONF_dfs_namenode_datanode_registration_ip___hostname___check=false
       - HDFS_CONF_dfs_namenode_rpc___bind___host=0.0.0.0
       - HDFS_CONF_dfs_namenode_servicerpc___bind___host=0.0.0.0
       - HDFS_CONF_dfs_namenode_http___bind___host=0.0.0.0
       - HDFS_CONF_dfs_namenode_https___bind___host=0.0.0.0
+      - HDFS_CONF_dfs_client_failover_proxy_provider=org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider
     volumes:
       - ./hdfs/namenode:/hadoop/dfs/name  # HDFS internal metadata
       - ./data:/data  # Parquet files - readable from host
@@ -197,16 +198,75 @@ services:
     environment:
       - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
       - CORE_CONF_hadoop_http_staticuser_user=root
-      - HDFS_CONF_dfs_replication=1
+      - HDFS_CONF_dfs_replication=2
       - HDFS_CONF_dfs_datanode_data_dir=/hadoop/dfs/data
       - HDFS_CONF_dfs_datanode_address=0.0.0.0:9866
       - HDFS_CONF_dfs_datanode_http___address=0.0.0.0:9864
       - HDFS_CONF_dfs_datanode_ipc___address=0.0.0.0:9867
-      - HDFS_CONF_dfs_client_use_datanode_hostname=true
-      - HDFS_CONF_dfs_datanode_use_datanode_hostname=true
+      - HDFS_CONF_dfs_client_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_hostname=${MASTER_TAILSCALE_IP}
     volumes:
       - ./hdfs/datanode-1:/hadoop/dfs/data  # HDFS internal blocks
       - ./data:/data  # Parquet files - readable from host
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  datanode-2:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
+    container_name: datanode-2
+    hostname: datanode-2
+    depends_on:
+      - namenode
+    ports:
+      - "9865:9864"  # Datanode HTTP
+      - "9868:9866"  # Datanode data transfer
+      - "9869:9867"  # Datanode IPC
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - CORE_CONF_hadoop_http_staticuser_user=root
+      - HDFS_CONF_dfs_replication=2
+      - HDFS_CONF_dfs_datanode_data_dir=/hadoop/dfs/data
+      - HDFS_CONF_dfs_datanode_address=0.0.0.0:9866
+      - HDFS_CONF_dfs_datanode_http___address=0.0.0.0:9864
+      - HDFS_CONF_dfs_datanode_ipc___address=0.0.0.0:9867
+      - HDFS_CONF_dfs_client_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_hostname=${MASTER_TAILSCALE_IP}
+    volumes:
+      - ./hdfs/datanode-2:/hadoop/dfs/data
+      - ./data:/data
+    networks:
+      - spark-network
+    restart: unless-stopped
+
+  datanode-3:
+    image: bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8
+    platform: linux/amd64
+    container_name: datanode-3
+    hostname: datanode-3
+    depends_on:
+      - namenode
+    ports:
+      - "9871:9864"  # Datanode HTTP
+      - "9872:9866"  # Datanode data transfer
+      - "9873:9867"  # Datanode IPC
+    environment:
+      - CORE_CONF_fs_defaultFS=hdfs://namenode:9000
+      - CORE_CONF_hadoop_http_staticuser_user=root
+      - HDFS_CONF_dfs_replication=2
+      - HDFS_CONF_dfs_datanode_data_dir=/hadoop/dfs/data
+      - HDFS_CONF_dfs_datanode_address=0.0.0.0:9866
+      - HDFS_CONF_dfs_datanode_http___address=0.0.0.0:9864
+      - HDFS_CONF_dfs_datanode_ipc___address=0.0.0.0:9867
+      - HDFS_CONF_dfs_client_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_use_datanode_hostname=false
+      - HDFS_CONF_dfs_datanode_hostname=${MASTER_TAILSCALE_IP}
+    volumes:
+      - ./hdfs/datanode-3:/hadoop/dfs/data
+      - ./data:/data
     networks:
       - spark-network
     restart: unless-stopped
@@ -271,6 +331,8 @@ networks:
 volumes:
   namenode-data:
   datanode-1-data:
+  datanode-2-data:
+  datanode-3-data:
   worker-1-cache:
   worker-1-logs:
   worker-2-cache:
