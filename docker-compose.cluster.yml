@@ -78,6 +78,7 @@ services:
       - "spark-master:${MASTER_TAILSCALE_IP}"
       - "namenode:${MASTER_TAILSCALE_IP}"
       - "datanode-1:${MASTER_TAILSCALE_IP}"
+      - "100.82.67.64:${MASTER_TAILSCALE_IP}"
     restart: unless-stopped
 
   spark-worker-2:
@@ -109,6 +110,9 @@ services:
       - spark-network
     extra_hosts:
       - "spark-master:${MASTER_TAILSCALE_IP}"
+      - "namenode:${MASTER_TAILSCALE_IP}"
+      - "datanode-1:${MASTER_TAILSCALE_IP}"
+      - "100.82.67.64:${MASTER_TAILSCALE_IP}"
       - "kafka:${MASTER_TAILSCALE_IP}"
     restart: unless-stopped
 
@@ -141,6 +145,9 @@ services:
       - spark-network
     extra_hosts:
       - "spark-master:${MASTER_TAILSCALE_IP}"
+      - "namenode:${MASTER_TAILSCALE_IP}"
+      - "datanode-1:${MASTER_TAILSCALE_IP}"
+      - "100.82.67.64:${MASTER_TAILSCALE_IP}"
       - "kafka:${MASTER_TAILSCALE_IP}"
     restart: unless-stopped
 
@@ -195,6 +202,8 @@ services:
       - HDFS_CONF_dfs_datanode_address=0.0.0.0:9866
       - HDFS_CONF_dfs_datanode_http___address=0.0.0.0:9864
       - HDFS_CONF_dfs_datanode_ipc___address=0.0.0.0:9867
+      - HDFS_CONF_dfs_client_use_datanode_hostname=true
+      - HDFS_CONF_dfs_datanode_use_datanode_hostname=true
     volumes:
       - ./hdfs/datanode-1:/hadoop/dfs/data  # HDFS internal blocks
       - ./data:/data  # Parquet files - readable from host

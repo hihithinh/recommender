@@ -34,6 +34,7 @@ class SparkConfig:
                 .config("spark.driver.blockManager.port", "35001")
                 .config("spark.hadoop.fs.defaultFS", f"hdfs://{master_ip}:9000")
                 .config("spark.hadoop.dfs.replication", "1")
+                .config("spark.hadoop.dfs.client.use.datanode.hostname", "true")
                 .config("spark.sql.adaptive.enabled", "true")
                 .config("spark.sql.adaptive.coalescePartitions.enabled", "true")
                 .config("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
