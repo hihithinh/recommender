@@ -44,19 +44,14 @@ class SparkConfig:
                 .config("spark.network.timeout", "800s")
                 .config("spark.rpc.askTimeout", "600s")
                 .config("spark.executor.heartbeatInterval", "60s")
+                # Use custom log4j2 config to limit stack trace depth
+                .config("spark.driver.extraJavaOptions", "-Dlog4j.configuration=file:///opt/conf/log4j2.properties")
+                .config("spark.executor.extraJavaOptions", "-Dlog4j.configuration=file:///opt/conf/log4j2.properties")
                 .getOrCreate())
         
-        # Show WARN level but with minimal stack traces
+        # Log configuration is handled by custom log4j2.properties
+        # Stack traces are limited to 3 lines via %xEx{3} pattern
         spark.sparkContext.setLogLevel("WARN")
-        
-        # Configure log pattern to show only essential info (no full stack traces)
-        log4j = spark.sparkContext._jvm.org.apache.log4j
-        
-        # Suppress verbose DataStreamer/HDFS internal logs (too noisy)
-        log4j.Logger.getLogger("org.apache.hadoop.hdfs.DataStreamer").setLevel(log4j.Level.ERROR)
-        log4j.Logger.getLogger("org.apache.hadoop.hdfs.DFSClient").setLevel(log4j.Level.ERROR)
-        log4j.Logger.getLogger("org.apache.hadoop.ipc").setLevel(log4j.Level.ERROR)
-        log4j.Logger.getLogger("org.apache.hadoop.hdfs.protocol.datatransfer").setLevel(log4j.Level.ERROR)
         
         return spark
     

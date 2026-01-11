@@ -38,6 +38,7 @@ services:
       - ./data/raw:/opt/raw-data
       - ./src:/opt/spark-apps
       - ./scripts:/opt/scripts
+      - ./conf:/opt/conf
       - ./logs/spark:/opt/spark/logs
     networks:
       - spark-network
@@ -54,6 +55,8 @@ services:
       dockerfile: Dockerfile
     container_name: spark-worker-1
     hostname: spark-worker-1
+    depends_on:
+      - spark-master
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
@@ -72,6 +75,7 @@ services:
     volumes:
       - worker-1-cache:/opt/spark-data
       - worker-1-logs:/opt/spark/logs
+      - ./scripts:/opt/scripts
     networks:
       - spark-network
     extra_hosts:
@@ -79,6 +83,12 @@ services:
       - "namenode:${MASTER_TAILSCALE_IP}"
       - "datanode-1:${MASTER_TAILSCALE_IP}"
       - "100.82.67.64:${MASTER_TAILSCALE_IP}"
+    healthcheck:
+      test: ["CMD", "sh", "/opt/scripts/check_worker_health.sh", "8081", "${MASTER_TAILSCALE_IP}"]
+      interval: 15s
+      timeout: 10s
+      retries: 2
+      start_period: 40s
     restart: unless-stopped
 
   spark-worker-2:
@@ -87,6 +97,8 @@ services:
       dockerfile: Dockerfile
     container_name: spark-worker-2
     hostname: spark-worker-2
+    depends_on:
+      - spark-master
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
@@ -114,6 +126,12 @@ services:
       - "datanode-1:${MASTER_TAILSCALE_IP}"
       - "100.82.67.64:${MASTER_TAILSCALE_IP}"
       - "kafka:${MASTER_TAILSCALE_IP}"
+    healthcheck:
+      test: ["CMD", "sh", "/opt/scripts/check_worker_health.sh", "8082", "${MASTER_TAILSCALE_IP}"]
+      interval: 15s
+      timeout: 10s
+      retries: 2
+      start_period: 40s
     restart: unless-stopped
 
   spark-worker-3:
@@ -122,6 +140,8 @@ services:
       dockerfile: Dockerfile
     container_name: spark-worker-3
     hostname: spark-worker-3
+    depends_on:
+      - spark-master
     environment:
       - SPARK_MODE=worker
       - SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077
@@ -149,6 +169,12 @@ services:
       - "datanode-1:${MASTER_TAILSCALE_IP}"
       - "100.82.67.64:${MASTER_TAILSCALE_IP}"
       - "kafka:${MASTER_TAILSCALE_IP}"
+    healthcheck:
+      test: ["CMD", "sh", "/opt/scripts/check_worker_health.sh", "8083", "${MASTER_TAILSCALE_IP}"]
+      interval: 15s
+      timeout: 10s
+      retries: 2
+      start_period: 40s
     restart: unless-stopped
 
   # ============================================

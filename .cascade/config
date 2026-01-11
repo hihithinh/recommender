@@ -1,0 +1,164 @@
+# Cascade AI Configuration for BookCrossing Recommender System
+# This file contains important context and reminders for AI assistants
+
+## PROJECT OVERVIEW
+This is a REAL DISTRIBUTED SYSTEM running across multiple physical machines via Tailscale VPN.
+- NOT a local development setup
+- NOT a single-machine simulation
+- Workers run on DIFFERENT PHYSICAL MACHINES, not just different containers on localhost
+
+## ARCHITECTURE
+
+### Distributed Components
+1. **Master Machine** (has Tailscale IP: ${MASTER_TAILSCALE_IP})
+   - spark-master: Spark cluster coordinator
+   - namenode: HDFS namenode
+   - datanode-1, datanode-2, datanode-3: HDFS storage nodes
+   - jupyter-notebook: Development environment
+   - api-server: REST API for recommendations
+
+2. **Worker Machines** (separate physical machines)
+   - spark-worker-1: On different machine, connects via Tailscale
+   - spark-worker-2: On different machine, connects via Tailscale
+   - spark-worker-3: On different machine, connects via Tailscale
+   - Each worker has its own CPU/memory resources
+
+### Network Setup
+- **Tailscale VPN**: All machines connected via Tailscale mesh network
+- **MASTER_TAILSCALE_IP**: Environment variable containing master's Tailscale IP (e.g., 100.82.67.64)
+- **extra_hosts**: Workers use this to resolve master hostnames to Tailscale IP
+- **Ports exposed**: All critical ports (7077, 9000, 9866, etc.) exposed for cross-machine communication
+
+## CRITICAL CONFIGURATIONS
+
+### HDFS Configuration
+- **dfs.replication=2**: Data replicated across 2 datanodes for fault tolerance
+- **dfs.datanode.hostname=${MASTER_TAILSCALE_IP}**: Datanodes advertise Tailscale IP so remote workers can access them
+- **dfs.client.use.datanode.hostname=true**: Clients connect to datanodes via advertised hostname (Tailscale IP)
+
+### Spark Configuration
+- **SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077**: Workers connect to master via Tailscale
+- **spark.driver.host=${MASTER_TAILSCALE_IP}**: Driver advertises Tailscale IP to executors
+- **spark.hadoop.fs.defaultFS=hdfs://${MASTER_TAILSCALE_IP}:9000**: All Spark jobs access HDFS via Tailscale
+
+### Logging Configuration
+- **conf/log4j2.properties**: Custom log4j config with %xEx{3} to limit stack traces to 3 lines
+- **Log level**: WARN for general logs, ERROR/FATAL for verbose components (DataStreamer, BlockManager, etc.)
+- **Purpose**: Reduce log noise while keeping essential error information for debugging
+
+### Worker Auto-Reconnection
+- **healthcheck**: Custom script (`scripts/check_worker_health.sh`) verifies worker is ACTUALLY registered with master
+- **Logic**: 3-step verification every 15s
+  1. Check worker's own web UI is responsive (http://localhost:808X)
+  2. Get worker ID from worker's JSON API
+  3. Query master's API to verify this worker ID is in the registered workers list
+  - If worker is NOT in master's list after 2 retries (30s), worker is marked unhealthy
+- **restart: unless-stopped**: Docker automatically restarts unhealthy workers
+- **Advantage**: Checks ACTUAL registration status from worker's perspective, not just network connectivity
+- **Purpose**: Workers auto-reconnect within 30-45s when master restarts or connection is lost
+
+## DATA PIPELINE
+
+### Sequential Processing (MUST run in order)
+1. **Preprocessing** (`run_preprocessing.py`)
+   - Input: Raw CSV files from HDFS `/data/raw/`
+   - Output: `ratings.parquet`, `users.parquet`, `books.parquet` in `/data/processed/`
+   - Purpose: Clean data, create user-item indices for ALS
+
+2. **ALS Training** (`train_als.py`)
+   - Input: `/data/processed/ratings.parquet`
+   - Output: 
+     - Model: `/models/als_model`
+     - Splits: `train_ratings.parquet`, `validation_ratings.parquet`, `test_ratings.parquet`
+   - Purpose: Train collaborative filtering model, create train/val/test splits
+
+3. **ALS Embedding Extraction** (`extract_als_embeddings.py`)
+   - Input: `/models/als_model`
+   - Output: `/data/embeddings/als_user_embeddings.parquet`, `/data/embeddings/als_item_embeddings.parquet`
+   - Purpose: Extract user and item embeddings for LightGBM features
+
+4. **LightGBM Training** (`train_lightgbm.py`)
+   - Input: 
+     - Train/val/test splits from ALS
+     - User/item embeddings from ALS
+   - Output: `/models/lightgbm_model`
+   - Purpose: Train ranking model using ALS embeddings as features
+
+## COMMON ISSUES & SOLUTIONS
+
+### Issue: BlockMissingException / Dead datanodes
+**Cause**: Datanodes advertising wrong IP (Docker internal IP instead of Tailscale IP)
+**Solution**: Ensure `HDFS_CONF_dfs_datanode_hostname=${MASTER_TAILSCALE_IP}` is set for all datanodes
+
+### Issue: Workers not connecting to master
+**Cause**: Workers trying to connect via Docker network instead of Tailscale
+**Solution**: 
+- Set `SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077`
+- Add `extra_hosts` to map master hostname to Tailscale IP
+
+### Issue: Workers don't reconnect after master restart
+**Cause**: Spark workers don't have built-in reconnection logic
+**Solution**: Health checks added to auto-restart workers when master connection fails
+
+### Issue: Excessive log output with long stack traces
+**Cause**: Default Spark/Hadoop logging is very verbose
+**Solution**: Custom log4j2.properties with %xEx{3} pattern to limit stack traces to 3 lines
+
+### Issue: Job fails with "Path does not exist" on HDFS
+**Cause**: Data not uploaded or wrong HDFS path
+**Solution**: 
+- Run `./scripts/upload_to_hdfs.sh` to upload raw data
+- Verify with `docker exec namenode hdfs dfs -ls /data/raw/`
+
+## IMPORTANT REMINDERS
+
+### When Modifying Configurations
+1. **Network changes**: Always consider both Docker network AND Tailscale network
+2. **IP changes**: Update MASTER_TAILSCALE_IP in .env file if master machine changes
+3. **Worker configs**: Workers on different machines need manual docker-compose restart
+4. **HDFS replication**: Keep replication >= 2 for fault tolerance with multiple datanodes
+
+### When Debugging
+1. **Check worker registration**: `curl http://localhost:8080/json/` on master machine
+2. **Check HDFS health**: `docker exec namenode hdfs dfsadmin -report`
+3. **Check logs**: Application logs in `/opt/logs/training/`, Spark UI at `http://${MASTER_TAILSCALE_IP}:4040`
+4. **Network connectivity**: Verify workers can ping master Tailscale IP
+
+### When Running Jobs
+1. **Always run from master machine**: Jobs submit to master, which distributes to workers
+2. **Monitor Spark UI**: Check `http://localhost:8080` for cluster status and `http://localhost:4040` for job progress
+3. **Check HDFS space**: Ensure enough space for intermediate shuffle files and outputs
+4. **Sequential pipeline**: Must run preprocessing → ALS → embeddings → LightGBM in order
+
+## FILE LOCATIONS
+
+### Configuration Files
+- `.env`: Contains MASTER_TAILSCALE_IP and other environment variables
+- `docker-compose.cluster.yml`: Distributed cluster configuration
+- `conf/log4j2.properties`: Custom logging configuration
+- `src/config/spark_config.py`: Spark session configuration with HDFS paths
+
+### Data Directories
+- `data/raw/`: Raw CSV files (uploaded to HDFS)
+- `data/processed/`: Processed Parquet files from preprocessing
+- `data/embeddings/`: ALS user/item embeddings
+- `models/`: Trained models (ALS, LightGBM)
+- `logs/`: Application and Spark logs
+
+### Scripts
+- `scripts/upload_to_hdfs.sh`: Upload raw data to HDFS
+- `scripts/run_preprocessing.py`: Data preprocessing pipeline
+- `scripts/extract_als_embeddings.py`: Extract embeddings from ALS model
+- `src/training/train_als.py`: ALS model training
+- `src/training/train_lightgbm.py`: LightGBM model training
+
+## TECHNOLOGY STACK
+- **Spark 3.5.0**: Distributed data processing
+- **Hadoop 3.2.1**: HDFS distributed file system
+- **Python 3.10**: Application code
+- **LightGBM**: Gradient boosting for ranking
+- **Docker**: Containerization
+- **Tailscale**: VPN for distributed setup
+- **PySpark**: Spark Python API
+- **Pandas**: Data manipulation
+- **NumPy**: Numerical operations
