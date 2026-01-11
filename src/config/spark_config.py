@@ -46,7 +46,17 @@ class SparkConfig:
                 .config("spark.executor.heartbeatInterval", "60s")
                 .getOrCreate())
         
+        # Show WARN level but with minimal stack traces
         spark.sparkContext.setLogLevel("WARN")
+        
+        # Configure log pattern to show only essential info (no full stack traces)
+        log4j = spark.sparkContext._jvm.org.apache.log4j
+        
+        # Suppress verbose DataStreamer/HDFS internal logs (too noisy)
+        log4j.Logger.getLogger("org.apache.hadoop.hdfs.DataStreamer").setLevel(log4j.Level.ERROR)
+        log4j.Logger.getLogger("org.apache.hadoop.hdfs.DFSClient").setLevel(log4j.Level.ERROR)
+        log4j.Logger.getLogger("org.apache.hadoop.ipc").setLevel(log4j.Level.ERROR)
+        log4j.Logger.getLogger("org.apache.hadoop.hdfs.protocol.datatransfer").setLevel(log4j.Level.ERROR)
         
         return spark
     
