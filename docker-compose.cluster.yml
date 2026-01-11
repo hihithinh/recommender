@@ -76,6 +76,8 @@ services:
       - worker-1-cache:/opt/spark-data
       - worker-1-logs:/opt/spark/logs
       - ./scripts:/opt/scripts
+      - ./docker/spark-worker/entrypoint.sh:/entrypoint-custom.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
     networks:
       - spark-network
     extra_hosts:
@@ -109,6 +111,7 @@ services:
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
+      - MASTER_TAILSCALE_IP=${MASTER_TAILSCALE_IP}
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
     ports:
@@ -118,6 +121,8 @@ services:
       - ./scripts:/opt/scripts
       - worker-2-cache:/opt/spark-data
       - worker-2-logs:/opt/spark/logs
+      - ./docker/spark-worker/entrypoint.sh:/entrypoint-custom.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
     networks:
       - spark-network
     extra_hosts:
@@ -152,6 +157,7 @@ services:
       - SPARK_RPC_ENCRYPTION_ENABLED=no
       - SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED=no
       - SPARK_SSL_ENABLED=no
+      - MASTER_TAILSCALE_IP=${MASTER_TAILSCALE_IP}
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
     ports:
@@ -161,6 +167,8 @@ services:
       - ./scripts:/opt/scripts
       - worker-3-cache:/opt/spark-data
       - worker-3-logs:/opt/spark/logs
+      - ./docker/spark-worker/entrypoint.sh:/entrypoint-custom.sh:ro
+    entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
     networks:
       - spark-network
     extra_hosts:

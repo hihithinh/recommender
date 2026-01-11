@@ -39,6 +39,14 @@ This is a REAL DISTRIBUTED SYSTEM running across multiple physical machines via 
 ### Spark Configuration
 - **SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077**: Workers connect to master via Tailscale
 - **spark.driver.host=${MASTER_TAILSCALE_IP}**: Driver advertises Tailscale IP to executors
+- **SPARK_LOCAL_IP (auto-detected)**: CRITICAL - Automatically detects and sets worker's Tailscale IP instead of Docker internal IP (172.18.0.x)
+  - Auto-detection methods (in order):
+    1. `tailscale ip -4` command if available
+    2. Network interface with 100.x.x.x IP (Tailscale range)
+    3. Hostname resolution
+    4. Route to master IP
+  - Without this, executors advertise Docker IPs → driver cannot connect → connection timeout
+  - Handled by custom entrypoint script (`docker/spark-worker/entrypoint.sh`)
 - **spark.hadoop.fs.defaultFS=hdfs://${MASTER_TAILSCALE_IP}:9000**: All Spark jobs access HDFS via Tailscale
 
 ### Logging Configuration
@@ -85,6 +93,15 @@ This is a REAL DISTRIBUTED SYSTEM running across multiple physical machines via 
    - Purpose: Train ranking model using ALS embeddings as features
 
 ## COMMON ISSUES & SOLUTIONS
+
+### Issue: Connection timeout to 172.18.0.x (Docker internal IP)
+**Cause**: Executors advertising Docker internal IP instead of worker's Tailscale IP
+**Symptom**: `io.netty.channel.AbstractChannel$AnnotatedConnectException: Connection timed out: /172.18.0.3:xxxxx`
+**Solution**: 
+- SPARK_LOCAL_IP is now **auto-detected** by entrypoint script
+- Script tries multiple methods to find Tailscale IP (100.x.x.x range)
+- If auto-detection fails, check worker logs for "WARNING: Could not auto-detect"
+- Manual override: Set `SPARK_LOCAL_IP` environment variable in docker-compose if needed
 
 ### Issue: BlockMissingException / Dead datanodes
 **Cause**: Datanodes advertising wrong IP (Docker internal IP instead of Tailscale IP)
