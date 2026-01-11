@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     curl \
     vim \
+    iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt

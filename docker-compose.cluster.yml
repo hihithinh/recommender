@@ -114,8 +114,7 @@ services:
       - MASTER_TAILSCALE_IP=${MASTER_TAILSCALE_IP}
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
-    ports:
-      - "8082:8082"
+    network_mode: host
     volumes:
       - ./src:/opt/spark-apps
       - ./scripts:/opt/scripts
@@ -123,14 +122,6 @@ services:
       - worker-2-logs:/opt/spark/logs
       - ./docker/spark-worker/entrypoint.sh:/entrypoint-custom.sh:ro
     entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
-    networks:
-      - spark-network
-    extra_hosts:
-      - "spark-master:${MASTER_TAILSCALE_IP}"
-      - "namenode:${MASTER_TAILSCALE_IP}"
-      - "datanode-1:${MASTER_TAILSCALE_IP}"
-      - "100.82.67.64:${MASTER_TAILSCALE_IP}"
-      - "kafka:${MASTER_TAILSCALE_IP}"
     healthcheck:
       test: ["CMD", "sh", "/opt/scripts/check_worker_health.sh", "8082", "${MASTER_TAILSCALE_IP}"]
       interval: 15s
@@ -160,8 +151,7 @@ services:
       - MASTER_TAILSCALE_IP=${MASTER_TAILSCALE_IP}
       - PYSPARK_PYTHON=python3
       - PYSPARK_DRIVER_PYTHON=python3
-    ports:
-      - "8083:8083"
+    network_mode: host
     volumes:
       - ./src:/opt/spark-apps
       - ./scripts:/opt/scripts
@@ -169,14 +159,6 @@ services:
       - worker-3-logs:/opt/spark/logs
       - ./docker/spark-worker/entrypoint.sh:/entrypoint-custom.sh:ro
     entrypoint: ["/bin/bash", "/entrypoint-custom.sh"]
-    networks:
-      - spark-network
-    extra_hosts:
-      - "spark-master:${MASTER_TAILSCALE_IP}"
-      - "namenode:${MASTER_TAILSCALE_IP}"
-      - "datanode-1:${MASTER_TAILSCALE_IP}"
-      - "100.82.67.64:${MASTER_TAILSCALE_IP}"
-      - "kafka:${MASTER_TAILSCALE_IP}"
     healthcheck:
       test: ["CMD", "sh", "/opt/scripts/check_worker_health.sh", "8083", "${MASTER_TAILSCALE_IP}"]
       interval: 15s

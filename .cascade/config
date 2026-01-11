@@ -39,14 +39,11 @@ This is a REAL DISTRIBUTED SYSTEM running across multiple physical machines via 
 ### Spark Configuration
 - **SPARK_MASTER_URL=spark://${MASTER_TAILSCALE_IP}:7077**: Workers connect to master via Tailscale
 - **spark.driver.host=${MASTER_TAILSCALE_IP}**: Driver advertises Tailscale IP to executors
-- **SPARK_LOCAL_IP (auto-detected)**: CRITICAL - Automatically detects and sets worker's Tailscale IP instead of Docker internal IP (172.18.0.x)
-  - Auto-detection methods (in order):
-    1. `tailscale ip -4` command if available
-    2. Network interface with 100.x.x.x IP (Tailscale range)
-    3. Hostname resolution
-    4. Route to master IP
-  - Without this, executors advertise Docker IPs → driver cannot connect → connection timeout
-  - Handled by custom entrypoint script (`docker/spark-worker/entrypoint.sh`)
+- **network_mode: host**: Workers on remote machines use host network mode
+  - This allows executors to bind directly to the host's Tailscale IP
+  - Executors become accessible at the worker machine's Tailscale IP
+  - No need for complex IP advertising or port forwarding
+  - Worker-1 (on master machine) uses bridge network, worker-2 and worker-3 use host network
 - **spark.hadoop.fs.defaultFS=hdfs://${MASTER_TAILSCALE_IP}:9000**: All Spark jobs access HDFS via Tailscale
 
 ### Logging Configuration
