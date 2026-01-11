@@ -14,41 +14,23 @@ if command -v tailscale &> /dev/null; then
     fi
 fi
 
-# Method 2: If tailscale command not available, try to detect from network interfaces
-# Tailscale IPs are typically in 100.x.x.x range
+# Method 2: Try to detect from network interfaces (Tailscale IPs are in 100.x.x.x range)
 if [ -z "$SPARK_LOCAL_IP" ]; then
-    DETECTED_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)100\.\d+\.\d+\.\d+' | head -1)
+    DETECTED_IP=$(ip -4 addr show 2>/dev/null | grep -oP '(?<=inet\s)100\.\d+\.\d+\.\d+' | head -1)
     if [ -n "$DETECTED_IP" ]; then
         export SPARK_LOCAL_IP="$DETECTED_IP"
-        echo "Auto-detected IP from interface: $SPARK_LOCAL_IP"
+        echo "Auto-detected Tailscale IP from interface: $SPARK_LOCAL_IP"
     fi
 fi
 
-# Method 3: Fallback to resolving hostname to IP
+# If no Tailscale interface found, worker is on same machine as master
+# DON'T set SPARK_LOCAL_IP - let worker use its Docker IP
+# This avoids bind errors when trying to bind to an IP that doesn't exist in the container
 if [ -z "$SPARK_LOCAL_IP" ]; then
-    # Get the IP that can reach the master
-    DETECTED_IP=$(getent hosts $(hostname) | awk '{ print $1 }' | grep -v '^127\.' | head -1)
-    if [ -n "$DETECTED_IP" ]; then
-        export SPARK_LOCAL_IP="$DETECTED_IP"
-        echo "Auto-detected IP from hostname: $SPARK_LOCAL_IP"
-    fi
+    echo "No Tailscale interface found. Worker on same machine as master."
+    echo "Using default Docker IP for local communication."
 fi
 
-# Method 4: Last resort - use the IP that can reach master
-if [ -z "$SPARK_LOCAL_IP" ] && [ -n "$MASTER_TAILSCALE_IP" ]; then
-    # Get the local IP that would be used to reach master
-    DETECTED_IP=$(ip route get $MASTER_TAILSCALE_IP 2>/dev/null | grep -oP 'src \K\S+' | head -1)
-    if [ -n "$DETECTED_IP" ]; then
-        export SPARK_LOCAL_IP="$DETECTED_IP"
-        echo "Auto-detected IP from route to master: $SPARK_LOCAL_IP"
-    fi
-fi
-
-# If still not set, warn but continue
-if [ -z "$SPARK_LOCAL_IP" ]; then
-    echo "WARNING: Could not auto-detect Tailscale IP. Executors may advertise Docker internal IP."
-    echo "Set SPARK_LOCAL_IP environment variable manually if you encounter connection issues."
-fi
-
-# Start Spark worker with original entrypoint
-exec /opt/bitnami/scripts/spark/entrypoint.sh "$@"
+# Start Spark worker with correct command for apache/spark image
+# Note: SPARK_LOCAL_IP is used for advertising to master, but worker binds to 0.0.0.0
+exec /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker ${SPARK_MASTER_URL}
