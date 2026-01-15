@@ -1,266 +1,188 @@
 # Distributed Book Recommender System
 
-Hệ thống gợi ý sách phân tán sử dụng Spark ALS và LightGBM với dữ liệu BookCrossing.
+Hệ thống gợi ý sách phân tán sử dụng Apache Spark ALS và LightGBM trên dữ liệu BookCrossing.
 
-**Pipeline**: HDFS (Distributed Storage) → Spark Cluster → ML Models → API
+## Kiến trúc
 
-## Kiến trúc phân tán linh hoạt
+### Tổng quan
+```
+HDFS (Distributed Storage) → Spark Cluster → ML Models (ALS + LightGBM) → REST API
+```
 
-Mỗi máy có thể chạy:
-- **Spark Master** + HDFS + Jupyter + API (máy có data)
-- **Spark Worker** (1 hoặc nhiều workers trên cùng 1 máy)
-- **Cả Master và Worker** (máy Mac có thể vừa là master vừa là worker)
+### Deployment Model
+Hệ thống hỗ trợ triển khai linh hoạt trên nhiều máy:
 
-**Connection**: Tailscale VPN (encrypted, no port forwarding)
+- **Master Node** (Docker): Spark Master, HDFS NameNode, Jupyter, API Server
+- **Worker Nodes**: 
+  - Docker: Chạy Spark Worker trong container
+  - WSL: Chạy Spark Worker trực tiếp trên WSL environment
+- **Kết nối**: Tailscale VPN (mã hóa end-to-end)
 
-## Yêu cầu
+## Công nghệ
 
-- Docker Desktop + Tailscale VPN
-- RAM: 8GB minimum, 16GB+ recommended
-- Storage: 50GB+ cho máy có data
+- **Storage**: HDFS (3 DataNodes, replication factor = 2)
+- **Processing**: Apache Spark 3.5.0 (cluster mode)
+- **ML Models**: 
+  - Spark MLlib ALS (Collaborative Filtering)
+  - LightGBM via SynapseML (Gradient Boosting)
+- **API**: Flask + PySpark
+- **Containerization**: Docker Compose
+- **Network**: Tailscale VPN
+
+## Yêu cầu hệ thống
+
+- Docker Desktop
+- Tailscale VPN
+- RAM: 8GB tối thiểu (khuyến nghị 16GB+)
+- Storage: 50GB+ cho Master node
 
 ## Setup
 
-### 1. Cài Tailscale
+### Bước 1: Cài đặt Tailscale
 
 ```bash
 # macOS
-brew install tailscale
-sudo tailscale up
+brew install tailscale && sudo tailscale up
 
-# Windows: https://tailscale.com/download/windows
+# Windows: tải từ https://tailscale.com/download/windows
 # Linux: curl -fsSL https://tailscale.com/install.sh | sh
 ```
 
-### 2. Lấy Tailscale IP
+### Bước 2: Cấu hình môi trường
 
 ```bash
-tailscale ip -4
-# Output: 100.x.x.x
-```
-
-### 3. Cấu hình .env
-
-```bash
-# Copy template
 cp .env.tailscale .env
-
-# Sửa file .env
-nano .env  # hoặc notepad .env trên Windows
+nano .env
 ```
 
-**Điền các giá trị:**
+Cấu hình file `.env`:
 ```bash
-THIS_MACHINE_IP=100.x.x.x        # IP của máy này (tailscale ip -4)
-MASTER_TAILSCALE_IP=100.y.y.y    # IP của máy chạy Master (QUAN TRỌNG!)
-SPARK_WORKER_CORES=4              # Số cores cho worker
-SPARK_WORKER_MEMORY=8g            # RAM cho worker
+THIS_MACHINE_IP=100.x.x.x        # Lấy từ: tailscale ip -4
+MASTER_TAILSCALE_IP=100.y.y.y    # IP của Master node
+SPARK_WORKER_CORES=4
+SPARK_WORKER_MEMORY=8g
 ```
 
-**⚠️ LƯU Ý QUAN TRỌNG**: `MASTER_TAILSCALE_IP` phải là Tailscale IP thật của máy master, không phải `localhost` hay `127.0.0.1`. Dùng lệnh `tailscale ip -4` trên máy master để lấy IP.
+### Bước 3: Khởi động services
 
-### 4. Chạy Services
-
-**Trên máy chạy Master (có data):**
+**Master Node (Docker):**
 ```bash
-# Start all master services including 3 datanodes for fault tolerance
-docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 datanode-2 datanode-3 jupyter-notebook api-server
+docker compose -f docker-compose.cluster.yml up -d \
+  spark-master namenode datanode-1 datanode-2 datanode-3 \
+  jupyter-notebook api-server
 ```
 
-**Trên máy chạy Worker (bất kỳ máy nào):**
+**Worker Node (Docker):**
 ```bash
-# Worker 1
 docker compose -f docker-compose.cluster.yml up -d spark-worker-1
-
-# Worker 2 trên cùng máy (optional)
-docker compose -f docker-compose.cluster.yml up -d spark-worker-2
-
-# Worker 3 trên cùng máy (optional)
-docker compose -f docker-compose.cluster.yml up -d spark-worker-3
-
-# Hoặc start nhiều workers cùng lúc
-docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2 spark-worker-3
 ```
 
-**Máy Mac vừa Master vừa Worker:**
+**Worker Node (WSL):**
 ```bash
-# Start tất cả (master + 1 worker + HDFS with 3 datanodes)
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
-
-# Hoặc thêm nhiều workers
-docker compose -f docker-compose.cluster.yml up -d spark-worker-2 spark-worker-3
+# Cài đặt Java 11 và Spark trên WSL
+# Chạy worker script với MASTER_IP
+./start-worker-wsl.sh $MASTER_TAILSCALE_IP
 ```
 
-### 5. Verify Cluster
+### Bước 4: Kiểm tra cluster
 
-Truy cập: `http://<MASTER_IP>:8080` để xem workers đã kết nối
+Truy cập Spark Master UI: `http://<MASTER_IP>:8080`
 
-**Services:**
-- Spark Master UI: `http://[MASTER_IP]:8080`
-- Spark Worker UIs: `http://[WORKER_IP]:8081`, `8082`, `8083`, ...
-- HDFS NameNode UI: `http://[MASTER_IP]:9870`
-- Jupyter Lab: `http://[MASTER_IP]:8888`
-- API Server: `http://[MASTER_IP]:5001`
+**Các services khác:**
+- HDFS NameNode: `http://<MASTER_IP>:9870`
+- Jupyter Lab: `http://<MASTER_IP>:8888`
+- API Server: `http://<MASTER_IP>:5001`
 
-## Data Pipeline
+## Xử lý dữ liệu với Spark
 
-**Pipeline phải chạy tuần tự theo thứ tự sau:**
+### 1. Upload dữ liệu lên HDFS
 
-### 1. Upload Data to HDFS
+**Mục đích:** Tải raw CSV files lên HDFS với replication
 
-**Lần đầu tiên**, upload CSV files lên HDFS:
+**Input:** `data/raw/*.csv` (BX-Book-Ratings.csv, BX-Users.csv, BX_Books.csv)
+
+**Output:** HDFS `/data/raw/` với replication factor = 2
 
 ```bash
-# Start HDFS services with 3 datanodes for replication
 docker compose -f docker-compose.cluster.yml up -d namenode datanode-1 datanode-2 datanode-3
-
-# Wait for HDFS to exit safe mode (30-60 seconds)
 docker exec namenode hdfs dfsadmin -safemode wait
 
-# Verify all datanodes are live
-docker exec namenode hdfs dfsadmin -report
-# Should show: Live datanodes (3)
-
-# Upload CSV files to HDFS
 chmod +x scripts/upload_to_hdfs.sh
 ./scripts/upload_to_hdfs.sh
 
-# Set replication factor to 2 (chỉ cần chạy 1 lần duy nhất)
 docker exec namenode hdfs dfs -setrep -R 2 /data/raw/
-
-# Verify replication
-docker exec namenode hdfs fsck /data/raw/ -files -blocks -locations
-# Should show: Average block replication: 2.0
 ```
 
-### 2. Preprocessing (Tạo data cho ALS)
+### 2. Preprocessing
 
-**Mục đích**: Clean và index data từ CSV, tạo `ratings.parquet` cho ALS training.
+**Mục đích:** Làm sạch dữ liệu, tạo user/item indices, chuẩn bị cho training
+
+**Input:** HDFS `/data/raw/*.csv`
+
+**Output:** HDFS `/data/processed/{ratings,users,books}.parquet`
 
 ```bash
 docker exec spark-master python3 /opt/scripts/run_preprocessing.py
 ```
 
-**Output**: `/data/processed/ratings.parquet`, `/data/processed/users.parquet`, `/data/processed/books.parquet`
-
 ### 3. Train ALS Model
 
-**Mục đích**: Train ALS model và tạo train/val/test splits.
+**Mục đích:** Huấn luyện Collaborative Filtering model, tạo train/val/test splits
 
-**Lưu ý**: Code đã tự động config driver ports (35000, 35001) qua `SparkConfig.create_spark_session()`, không cần thêm `--conf`.
+**Input:** `/data/processed/ratings.parquet`
+
+**Output:** 
+- Model: `/models/als_model`
+- Splits: `/data/processed/{train,validation,test}_ratings.parquet`
 
 ```bash
 docker exec spark-master python3 /opt/spark-apps/training/train_als.py
 ```
 
-**Output**: 
-- ALS model: `/models/als_model`
-- Splits: `/data/processed/train_ratings.parquet`, `validation_ratings.parquet`, `test_ratings.parquet`
+### 4. Extract ALS Embeddings
 
-### 4. Extract ALS Embeddings (Tạo features cho LightGBM)
+**Mục đích:** Trích xuất user và item embeddings từ ALS model làm features cho LightGBM
 
-**Mục đích**: Load ALS model đã train và extract user/item embeddings.
+**Input:** `/models/als_model`
+
+**Output:** `/data/embeddings/als_{user,item}_embeddings.parquet`
 
 ```bash
 docker exec spark-master python3 /opt/scripts/extract_als_embeddings.py
 ```
 
-**Output**: 
-- Embeddings: `/data/embeddings/als_user_embeddings.parquet`, `als_item_embeddings.parquet`
+### 5. Train LightGBM Model
 
-### 5. Train LightGBM Model (Sử dụng ALS embeddings)
+**Mục đích:** Huấn luyện Gradient Boosting model kết hợp ALS embeddings và metadata features
 
-**Mục đích**: Train LightGBM model sử dụng ALS embeddings làm features.
+**Input:** 
+- `/data/embeddings/als_{user,item}_embeddings.parquet`
+- `/data/processed/{users,books}.parquet`
+
+**Output:** `/models/lightgbm_model`
 
 ```bash
 docker exec spark-master python3 /opt/spark-apps/training/train_lightgbm.py
 ```
 
-**Output**: LightGBM model: `/models/lightgbm_model`
+## API Endpoints
 
-**Hoặc dùng spark-submit** (nếu cần custom config):
-```bash
-docker exec spark-master spark-submit \
-  --master spark://<MASTER_IP>:7077 \
-  /opt/spark-apps/training/train_als.py
-```
+**Base URL:** `http://<MASTER_IP>:5001`
+
+- `POST /api/recommend` - Gợi ý sách cho user hiện có
+- `POST /api/recommend/new-user` - Gợi ý cho user mới (cold-start)
+- `GET /api/search?q=<query>` - Tìm kiếm sách
+- `GET /api/popular?top_n=20` - Sách phổ biến
+- `GET /api/health` - Health check
 
 ## Monitoring
 
 ```bash
-# Check status
 docker compose -f docker-compose.cluster.yml ps
-
-# View logs
-docker compose -f docker-compose.cluster.yml logs -f
-docker logs spark-worker-1
-
-# Restart services
-docker compose -f docker-compose.cluster.yml restart
+docker logs -f spark-master
+docker logs -f spark-worker-1
 ```
 
-## Troubleshooting
+## Tài liệu kỹ thuật
 
-**Worker không kết nối:**
-```bash
-ping <MASTER_IP>
-telnet <MASTER_IP> 7077
-docker logs spark-worker-1
-```
-
-**Tăng memory:**
-```bash
-# Edit .env: SPARK_WORKER_MEMORY=16g
-docker compose -f docker-compose.cluster.yml restart spark-worker
-```
-
-## Stop Services
-
-```bash
-# Stop tất cả
-docker compose -f docker-compose.cluster.yml down
-
-# Stop specific service
-docker compose -f docker-compose.cluster.yml stop spark-worker
-```
-
-## Ví dụ Deployment
-
-### Scenario 1: Mac Master + Windows Worker
-**Mac (có data):**
-```bash
-# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
-```
-
-**Windows:**
-```bash
-# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-worker-1
-```
-
-### Scenario 2: Mac vừa Master vừa Worker + Windows 2 Workers
-**Mac:**
-```bash
-# .env: THIS_MACHINE_IP=100.1.1.1, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-master spark-worker-1 namenode datanode-1 datanode-2 datanode-3 jupyter-notebook
-```
-
-**Windows:**
-```bash
-# .env: THIS_MACHINE_IP=100.1.1.2, MASTER_TAILSCALE_IP=100.1.1.1
-docker compose -f docker-compose.cluster.yml up -d spark-worker-1 spark-worker-2
-```
-
-## Tài liệu
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)**: Chi tiết kiến trúc, training pipeline, serving pipeline
-- **Source code**: `src/` directory
-  - Training: `src/training/`
-  - Models: `src/models/`
-  - API: `src/api/`
-  - Config: `src/config/`
-
-## License
-
-MIT
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Chi tiết kiến trúc và pipeline

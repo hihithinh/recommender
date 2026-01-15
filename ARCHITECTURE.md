@@ -1,46 +1,48 @@
 # Book Recommender System - Architecture
 
-## Tổng quan hệ thống
+## Tổng quan
 
-Hệ thống gợi ý sách phân tán sử dụng Apache Spark, Kafka, và Machine Learning (ALS + LightGBM).
+Hệ thống gợi ý sách phân tán sử dụng Apache Spark cluster với HDFS storage và ML models (ALS + LightGBM).
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     DISTRIBUTED CLUSTER                          │
 │                                                                   │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐          │
-│  │   Machine 1  │  │   Machine 2  │  │   Machine 3  │          │
+│  │   Master     │  │   Worker     │  │   Worker     │          │
+│  │   (Docker)   │  │ (Docker/WSL) │  │ (Docker/WSL) │          │
 │  │              │  │              │  │              │          │
 │  │ Spark Master │  │ Spark Worker │  │ Spark Worker │          │
-│  │ Kafka        │  │ Spark Worker │  │ Spark Worker │          │
+│  │ HDFS NN      │  │              │  │              │          │
+│  │ 3x DataNodes │  │              │  │              │          │
 │  │ Jupyter      │  │              │  │              │          │
 │  │ API Server   │  │              │  │              │          │
 │  └──────────────┘  └──────────────┘  └──────────────┘          │
 │         │                  │                  │                  │
 │         └──────────────────┴──────────────────┘                  │
-│                  Tailscale VPN Network                           │
+│                  Tailscale VPN (Encrypted)                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Đặc điểm kiến trúc
+### Đặc điểm
 
-- **Flexible Deployment**: Mỗi máy có thể chạy Master, Worker, hoặc cả hai
-- **Scalable**: Thêm workers để tăng processing power
-- **Secure**: Kết nối qua Tailscale VPN
-- **Cross-platform**: Mac, Windows, Linux
+- **Deployment linh hoạt**: Master chạy Docker, Worker chạy Docker hoặc WSL
+- **Scalable**: Horizontal scaling bằng cách thêm worker nodes
+- **Fault-tolerant**: HDFS replication factor = 2, 3 DataNodes
+- **Secure**: Tailscale VPN end-to-end encryption
 
-## Data Pipeline
+## Data Flow
 
 ```
-Raw Data (CSV) → Preprocessing → Parquet (Data Lake)
-                                       ↓
-                    ┌──────────────────┴──────────────────┐
-                    ↓                                      ↓
-            Training Pipeline                     Serving Pipeline
-                    ↓                                      ↓
-            ALS + LightGBM Models                  API Server
-                    ↓                                      ↓
-            Model Storage                          Recommendations
+CSV Files → HDFS → Preprocessing → Parquet Files
+                                        ↓
+                    ┌───────────────────┴────────────────┐
+                    ↓                                     ↓
+            Training Pipeline                    Serving Pipeline
+                    ↓                                     ↓
+        ALS Model → Embeddings → LightGBM         API Server (Flask)
+                    ↓                                     ↓
+            HDFS Model Storage                    REST Endpoints
 ```
 
 ---
@@ -49,127 +51,98 @@ Raw Data (CSV) → Preprocessing → Parquet (Data Lake)
 
 ### 1. Data Ingestion
 
-**Kafka Streaming** (Real-time)
-- Topics: `book-ratings`, `user-events`
-- Format: JSON messages
-- Location: `src/streaming/` (nếu có)
+**Source**: BookCrossing Dataset (CSV files)
+- `BX-Book-Ratings.csv` - User ratings (1.1M records)
+- `BX-Users.csv` - User demographics
+- `BX_Books.csv` - Book metadata
 
-**Batch Upload** (Historical data)
-- Raw CSV files: `./data/raw/`
-  - `BX-Book-Ratings.csv`
-  - `BX-Users.csv`
-  - `BX-Books.csv`
+**Storage**: Upload to HDFS với replication factor = 2
 
-### 2. Data Processing
+### 2. Preprocessing
 
 **Module**: `src/data_processing/`
 
-**Components**:
-- `data_loader.py`: Load raw CSV files
-- `data_cleaner.py`: Clean và validate data
-- `feature_engineering.py`: Tạo features cho models
+**Chức năng**:
+- `data_loader.py` - Load CSV từ HDFS
+- `data_cleaner.py` - Làm sạch missing values, outliers
+- `feature_engineering.py` - Tạo user/item indices, extract features
 
-**Output**: 
-- `./data/processed/ratings.parquet`
-- `./data/processed/users.parquet`
-- `./data/processed/books.parquet`
+**Input**: HDFS `/data/raw/*.csv`
 
-**Paths** (trong Docker):
+**Output**: HDFS `/data/processed/{ratings,users,books}.parquet`
+
+**HDFS Paths** (config trong `src/config/spark_config.py`):
 ```python
-# src/config/spark_config.py
-{
-    "raw_data": "hdfs://{master_ip}:9000/data/raw",
-    "processed_data": "hdfs://{master_ip}:9000/data/processed",
-    "embeddings": "hdfs://{master_ip}:9000/data/embeddings",
-    "models": "hdfs://{master_ip}:9000/data/models"
-}
+raw_data = "hdfs://{master_ip}:9000/data/raw"
+processed_data = "hdfs://{master_ip}:9000/data/processed"
+embeddings = "hdfs://{master_ip}:9000/data/embeddings"
+models = "hdfs://{master_ip}:9000/data/models"
 ```
 
-### 3. Model Training
-
-#### 3.1 ALS Model (Collaborative Filtering)
+### 3. ALS Model Training
 
 **File**: `src/training/train_als.py`
 
 **Algorithm**: Spark MLlib ALS (Alternating Least Squares)
 
-**Input**: 
-- Processed ratings: `user_index`, `item_index`, `rating`
+**Input**: `/data/processed/ratings.parquet` (user_index, item_index, rating)
 
-**Hyperparameters** (`src/config/model_config.py`):
+**Hyperparameters**:
+Tham khảo từ repo [als_deep_dive.ipynb](https://github.com/recommenders-team/recommenders/blob/main/examples/02_model_collaborative_filtering/als_deep_dive.ipynb), một repo gồm các best practice cho recommenders
 ```python
-class ALSConfig:
-    RANK = 50                    # Latent factors
-    MAX_ITER = 20                # Training iterations
-    REG_PARAM = 0.1              # Regularization
-    ALPHA = 1.0                  # Confidence weight
-    IMPLICIT_PREFS = False       # Explicit ratings
-    COLD_START_STRATEGY = "drop"
-    NUM_USER_BLOCKS = 10
-    NUM_ITEM_BLOCKS = 10
+RANK = 50              # Latent factors
+MAX_ITER = 20          # Iterations
+REG_PARAM = 0.1        # L2 regularization
+IMPLICIT_PREFS = False # Explicit ratings
 ```
 
 **Output**:
-- Model: `./data/models/als_model/`
-- User embeddings: `./data/embeddings/als_user_embeddings.parquet`
-- Item embeddings: `./data/embeddings/als_item_embeddings.parquet`
+- Model: `/models/als_model/`
+- Train/val/test splits: `/data/processed/{train,validation,test}_ratings.parquet`
 
-**Evaluation Metrics**:
-- RMSE (Root Mean Square Error)
-- MAE (Mean Absolute Error)
+**Metrics**: RMSE, MAE
 
-**Training Command**:
-```bash
-docker exec spark-master spark-submit \
-  --master spark://<MASTER_IP>:7077 \
-  /opt/spark-apps/training/train_als.py
-```
+### 4. Extract ALS Embeddings
 
-#### 3.2 LightGBM Model (Gradient Boosting)
+**File**: `scripts/extract_als_embeddings.py`
+
+**Input**: `/models/als_model/`
+
+**Output**: 
+- `/data/embeddings/als_user_embeddings.parquet` (user_id, features[50])
+- `/data/embeddings/als_item_embeddings.parquet` (item_id, features[50])
+
+### 5. LightGBM Model Training
 
 **File**: `src/training/train_lightgbm.py`
 
 **Algorithm**: LightGBM via SynapseML
 
-**Input**:
-- ALS embeddings (user + item)
-- User features (age, location)
-- Item features (author, year, publisher)
-- Interaction features
+**Features**:
+- ALS embeddings (50-dim user + 50-dim item)
+- User metadata (age, location)
+- Book metadata (author, year, publisher)
 
-**Hyperparameters** (`src/config/model_config.py`):
+**Hyperparameters**:
+Tham khảo từ repo [mmlspark_lightgbm_criteo.ipynb](https://github.com/recommenders-team/recommenders/blob/main/examples/02_model_content_based_filtering/mmlspark_lightgbm_criteo.ipynb), Content-Based Personalization with LightGBM on Spark
 ```python
-class LightGBMConfig:
-    NUM_LEAVES = 31
-    LEARNING_RATE = 0.05
-    NUM_ITERATIONS = 100
-    MAX_DEPTH = -1
-    MIN_DATA_IN_LEAF = 20
-    FEATURE_FRACTION = 0.8
-    BAGGING_FRACTION = 0.8
-    BAGGING_FREQ = 5
+NUM_LEAVES = 32
+LEARNING_RATE = 0.1
+NUM_ITERATIONS = 50
+FEATURE_FRACTION = 0.8
 ```
 
-**Output**:
-- Model: `./data/models/lightgbm_model/`
+**Output**: `/models/lightgbm_model/`
 
-**Training Command**:
-```bash
-docker exec spark-master spark-submit \
-  --master spark://<MASTER_IP>:7077 \
-  --packages com.microsoft.azure:synapseml_2.12:0.11.3 \
-  /opt/spark-apps/training/train_lightgbm.py
-```
-
-### 4. Model Evaluation
+### 6. Evaluation
 
 **Module**: `src/evaluation/metrics.py`
 
 **Metrics**:
-- RMSE, MAE (rating prediction)
-- Precision@K, Recall@K (ranking)
-- NDCG (Normalized Discounted Cumulative Gain)
-- Coverage (catalog coverage)
+- RMSE, MAE - Rating prediction accuracy
+- Precision@K, Recall@K - Top-K ranking quality
+- NDCG - Ranking relevance
+- Coverage - Catalog diversity
 
 ---
 
@@ -181,351 +154,134 @@ docker exec spark-master spark-submit \
 
 **File**: `src/api/app.py`
 
+**Port**: 5001
+
 **Endpoints**:
-
-#### GET `/`
-- Web UI homepage
-- Template: `templates/index.html`
-
-#### POST `/api/recommend`
-Request:
-```json
-{
-  "user_id": "12345",
-  "top_n": 10,
-  "use_lgbm": true
-}
-```
-
-Response:
-```json
-{
-  "user_id": "12345",
-  "recommendations": [
-    {
-      "isbn": "0439136350",
-      "title": "Harry Potter and the Prisoner of Azkaban",
-      "author": "J.K. Rowling",
-      "year": 1999,
-      "score": 8.5
-    }
-  ],
-  "user_history": [...],
-  "count": 10
-}
-```
-
-#### GET `/api/search?q=harry+potter&limit=20`
-- Search books by title/author
-- Returns matching books
-
-#### GET `/api/popular?top_n=20`
-- Get most popular books
-- Based on rating count and average rating
-
-#### POST `/api/recommend/new-user`
-Request:
-```json
-{
-  "age": 25,
-  "location": "New York",
-  "favorite_authors": ["J.K. Rowling"],
-  "favorite_genres": ["Fantasy"],
-  "top_n": 10
-}
-```
-
-- Cold-start recommendations
-- Based on demographics and preferences
-
-#### GET `/api/health`
-- Health check endpoint
-- Returns service status
-
-**Start Command**:
-```bash
-docker compose -f docker-compose.cluster.yml up -d api-server
-```
-
-**Access**: `http://<MASTER_IP>:5001`
+- `GET /` - Web UI
+- `POST /api/recommend` - Gợi ý cho user hiện có
+- `POST /api/recommend/new-user` - Cold-start recommendations
+- `GET /api/search` - Tìm kiếm sách
+- `GET /api/popular` - Top sách phổ biến
+- `GET /api/health` - Health check
 
 ### 2. Recommendation Service
 
 **File**: `src/api/recommendation_service.py`
 
-**Class**: `RecommendationService`
+**Chức năng**:
+- Load models từ HDFS (`/models/als_model`, `/models/lightgbm_model`)
+- Generate recommendations (ALS hoặc ALS + LightGBM)
+- Search và filter books
+- Cold-start handling cho new users
 
-**Methods**:
-- `get_user_recommendations()`: Generate recommendations for existing user
-- `get_recommendations_for_new_user()`: Cold-start recommendations
-- `search_books()`: Search functionality
-- `get_user_history()`: User's past ratings
+**Recommendation Strategies**:
+- **ALS only**: Nhanh, dựa trên collaborative filtering
+- **ALS + LightGBM**: Chậm hơn, kết hợp metadata features
 
-**Model Loading**:
-```python
-# Load ALS model
-als_model = ALSModel.load(f"{model_path}/als_model")
+### 3. Model Components
 
-# Load LightGBM model (if available)
-lgbm_model = LightGBMModel.load(f"{model_path}/lightgbm_model")
-```
+**ALS Recommender** (`src/models/als_recommender.py`):
+- Train/load ALS model
+- Extract user/item embeddings
+- Generate top-N recommendations
 
-**Recommendation Strategy**:
-1. **ALS only**: Fast, collaborative filtering
-2. **ALS + LightGBM**: Slower, more accurate (uses features)
-
-### 3. Model Classes
-
-#### ALS Recommender
-
-**File**: `src/models/als_recommender.py`
-
-**Class**: `ALSRecommender`
-
-**Methods**:
-- `train(train_df)`: Train ALS model
-- `predict(test_df)`: Generate predictions
-- `evaluate(predictions, metric)`: Calculate metrics
-- `get_user_embeddings()`: Extract user factors
-- `get_item_embeddings()`: Extract item factors
-- `recommend_for_user(user_id, n)`: Top-N recommendations
-- `save_model(path)`: Save trained model
-- `load_model(path)`: Load saved model
-
-#### LightGBM Recommender
-
-**File**: `src/models/lightgbm_recommender.py`
-
-**Class**: `LightGBMRecommender`
-
-**Methods**:
-- `train(train_df, features)`: Train LightGBM
-- `predict(test_df)`: Generate predictions
-- `evaluate(predictions, metric)`: Calculate metrics
-- `save_model(path)`: Save trained model
-- `load_model(path)`: Load saved model
+**LightGBM Recommender** (`src/models/lightgbm_recommender.py`):
+- Train/load LightGBM model
+- Combine ALS embeddings với metadata
+- Predict ratings
 
 ---
 
 ## Configuration
 
-### Spark Configuration
-
-**File**: `src/config/spark_config.py`
+### Spark Config (`src/config/spark_config.py`)
 
 ```python
-class SparkConfig:
-    @staticmethod
-    def create_spark_session(
-        app_name="BookCrossing-Recommender",
-        master="spark://spark-master:7077",
-        executor_memory="4g",
-        executor_cores=2,
-        driver_memory="2g"
-    )
+def create_spark_session(
+    app_name="BookCrossing-Recommender",
+    master="spark://spark-master:7077",
+    executor_memory="4g",
+    executor_cores=2,
+    driver_memory="2g"
+)
 ```
 
-**Key Settings**:
-- Adaptive Query Execution: Enabled
-- Serializer: Kryo (faster)
+**Key settings**:
+- Serializer: Kryo
 - Compression: Snappy (Parquet)
-- Shuffle partitions: 200
-- Network timeout: 600s
+- Adaptive Query Execution: Enabled
+- Driver ports: 35000, 35001 (auto-configured)
 
-### Model Configuration
+### Model Config (`src/config/model_config.py`)
 
-**File**: `src/config/model_config.py`
-
-**Classes**:
-- `ALSConfig`: ALS hyperparameters
-- `LightGBMConfig`: LightGBM hyperparameters
-- `DataConfig`: Train/val/test split ratios
+- `ALSConfig` - ALS hyperparameters
+- `LightGBMConfig` - LightGBM hyperparameters
+- `DataConfig` - Train/val/test split ratios
 
 ---
 
-## Utilities
+## Data Storage
 
-### Spark Utils
-
-**File**: `src/utils/spark_utils.py`
-
-**Functions**:
-- `save_parquet()`: Save DataFrame to Parquet
-- `load_parquet()`: Load Parquet to DataFrame
-- `print_dataframe_info()`: Display DataFrame stats
-
-### Logger
-
-**File**: `src/utils/logger.py`
-
-**Function**: `get_default_logger(name)`
-
-Centralized logging configuration.
-
----
-
-## Data Storage Structure
-
+### HDFS Structure
 ```
-./data/                          # Processed data (on master machine)
-  ├── processed/
-  │   ├── ratings.parquet        # Cleaned ratings
-  │   ├── users.parquet          # User features
-  │   ├── books.parquet          # Book features
-  │   ├── train_ratings.parquet
-  │   ├── validation_ratings.parquet
-  │   └── test_ratings.parquet
-  ├── embeddings/
+/data/
+  ├── raw/                          # CSV files (replication=2)
+  ├── processed/                    # Parquet files
+  │   ├── ratings.parquet
+  │   ├── users.parquet
+  │   ├── books.parquet
+  │   └── {train,validation,test}_ratings.parquet
+  ├── embeddings/                   # ALS embeddings
   │   ├── als_user_embeddings.parquet
   │   └── als_item_embeddings.parquet
-  └── models/
-      ├── als_model/             # Spark ALS model
-      └── lightgbm_model/        # LightGBM model
-
-./data/raw/                      # Raw CSV files
-  ├── BX-Book-Ratings.csv
-  ├── BX-Users.csv
-  └── BX-Books.csv
+  └── models/                       # Trained models
+      ├── als_model/
+      └── lightgbm_model/
 ```
 
----
-
-## Docker Volumes Mapping
-
-**In `docker-compose.cluster.yml`**:
-
+### Docker Volumes
 ```yaml
-# Spark Master & API Server
-volumes:
-  - ./data:/opt/spark-data           # Processed data, models
-  - ./data:/data                     # Parquet files (readable from host)
-  - ./data/raw:/opt/raw-data         # Raw CSV files
-  - ./src:/opt/spark-apps            # Source code
-  - ./scripts:/opt/scripts           # Helper scripts
-  - ./hdfs:/hadoop/dfs               # HDFS internal data
+Master:
+  - ./data:/opt/spark-data          # Models, processed data
+  - ./src:/opt/spark-apps           # Source code
+  - ./scripts:/opt/scripts          # Scripts
+  - ./hdfs:/hadoop/dfs              # HDFS storage
 
-# Spark Workers
-volumes:
-  - ./src:/opt/spark-apps            # Source code (read-only)
-  - ./scripts:/opt/scripts           # Helper scripts
-  - worker-X-cache:/opt/spark-data   # Local cache
+Workers:
+  - ./src:/opt/spark-apps           # Source code (read-only)
+  - worker-cache:/opt/spark-data    # Local cache
 ```
-
-**Path trong code phải match với Docker volumes!**
-
----
-
-## Deployment Flow
-
-### Training Phase
-
-1. **Upload data** → `./data/raw/` (then upload to HDFS with `./scripts/upload_to_hdfs.sh`)
-2. **Preprocessing** → `docker exec spark-master python3 /opt/scripts/run_preprocessing.py`
-3. **Train ALS** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_als.py`
-4. **Train LightGBM** → `docker exec spark-master spark-submit /opt/spark-apps/training/train_lightgbm.py`
-5. **Models saved** → `./data/models/`
-
-### Serving Phase
-
-1. **Start API Server** → `docker compose -f docker-compose.cluster.yml up -d api-server`
-2. **API loads models** from `./data/models/`
-3. **API ready** at `http://<MASTER_IP>:5001`
-4. **Make requests** via REST API or Web UI
-
----
-
-## Performance Optimization
-
-### Training
-
-1. **Data Partitioning**: Adjust `spark.sql.shuffle.partitions` based on data size
-2. **Caching**: Cache frequently accessed DataFrames
-3. **Checkpointing**: Enable for iterative algorithms (ALS)
-4. **Resource Allocation**: Increase executor memory/cores for large datasets
-
-### Serving
-
-1. **Model Caching**: Keep models in memory
-2. **Batch Predictions**: Process multiple users at once
-3. **Pre-computation**: Pre-compute popular recommendations
-4. **Connection Pooling**: Reuse Spark sessions
 
 ---
 
 ## Monitoring
 
-### Spark UIs
+**Spark UIs**:
+- Master: `http://<MASTER_IP>:8080` - Cluster status
+- Worker: `http://<WORKER_IP>:8081` - Worker resources
+- Application: `http://<MASTER_IP>:4040` - Job details
 
-- **Master UI**: `http://<MASTER_IP>:8080` - Cluster status, workers
-- **Worker UI**: `http://<WORKER_IP>:8081` - Worker resources, executors
-- **Application UI**: `http://<MASTER_IP>:4040` - Job details, stages, tasks
+**HDFS UI**: `http://<MASTER_IP>:9870` - DataNode status, storage
 
-### Kafka UI
-
-- **Kafka UI**: `http://<MASTER_IP>:8090` - Topics, messages, consumers
-
-### Logs
-
+**Logs**:
 ```bash
-# Application logs
 docker logs spark-master
 docker logs spark-worker-1
 docker logs api-server
-
-# Spark logs
-./logs/spark/
 ```
 
 ---
 
-## Scaling Strategy
+## Scaling
 
-### Horizontal Scaling (Add Workers)
-
+**Horizontal (thêm workers)**:
 ```bash
-# On new machine
-# Edit .env: WORKER_ID=4, THIS_MACHINE_IP=..., MASTER_TAILSCALE_IP=...
-docker compose -f docker-compose.cluster.yml up -d spark-worker
+# Trên máy mới: cấu hình .env và start worker
+docker compose -f docker-compose.cluster.yml up -d spark-worker-1
 ```
 
-### Vertical Scaling (Increase Resources)
-
+**Vertical (tăng resources)**:
 ```bash
-# Edit .env
-SPARK_WORKER_CORES=8
-SPARK_WORKER_MEMORY=16g
-
-# Restart
-docker compose -f docker-compose.cluster.yml restart spark-worker
+# Sửa .env: SPARK_WORKER_MEMORY=16g, SPARK_WORKER_CORES=8
+docker compose -f docker-compose.cluster.yml restart spark-worker-1
 ```
-
----
-
-## Security
-
-- ✅ **Tailscale VPN**: All traffic encrypted
-- ✅ **No public ports**: Only accessible within Tailscale network
-- ✅ **Authentication**: Can add API keys to Flask endpoints
-- ✅ **Data isolation**: Each worker has isolated cache
-
----
-
-## Future Enhancements
-
-### Training Pipeline
-- [ ] Hyperparameter tuning (Grid Search, Bayesian Optimization)
-- [ ] Model versioning (MLflow)
-- [ ] A/B testing framework
-- [ ] Online learning (incremental updates)
-
-### Serving Pipeline
-- [ ] Caching layer (Redis)
-- [ ] Load balancing (multiple API servers)
-- [ ] Rate limiting
-- [ ] User feedback loop
-
-### Infrastructure
-- [ ] Kubernetes deployment
-- [ ] Auto-scaling workers
-- [ ] Monitoring (Prometheus + Grafana)
-- [ ] CI/CD pipeline

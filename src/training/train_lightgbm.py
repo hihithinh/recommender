@@ -71,8 +71,9 @@ def train_lightgbm_model(spark: SparkSession):
     logger.info("Validation Metrics:")
     logger.info(f"  RMSE: {val_metrics['rmse']:.4f}")
     logger.info(f"  MAE: {val_metrics['mae']:.4f}")
-    logger.info(f"  R2: {val_metrics['r2']:.4f}")
-    logger.info(f"  Explained Variance: {val_metrics['var']:.4f}")
+    logger.info(f"  NDCG@5: {val_metrics['ndcg@5']:.4f}")
+    logger.info(f"  NDCG@10: {val_metrics['ndcg@10']:.4f}")
+    logger.info(f"  NDCG@20: {val_metrics['ndcg@20']:.4f}")
     
     logger.info("Evaluating on test set...")
     test_predictions = lgbm_recommender.predict(test_with_features)
@@ -81,8 +82,9 @@ def train_lightgbm_model(spark: SparkSession):
     logger.info("Test Metrics:")
     logger.info(f"  RMSE: {test_metrics['rmse']:.4f}")
     logger.info(f"  MAE: {test_metrics['mae']:.4f}")
-    logger.info(f"  R2: {test_metrics['r2']:.4f}")
-    logger.info(f"  Explained Variance: {test_metrics['var']:.4f}")
+    logger.info(f"  NDCG@5: {test_metrics['ndcg@5']:.4f}")
+    logger.info(f"  NDCG@10: {test_metrics['ndcg@10']:.4f}")
+    logger.info(f"  NDCG@20: {test_metrics['ndcg@20']:.4f}")
     
     logger.info("Saving predictions...")
     save_parquet(val_predictions, f"{paths['processed_data']}/lgbm_val_predictions.parquet")
