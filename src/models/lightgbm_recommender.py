@@ -19,8 +19,8 @@ class LightGBMRecommender:
         max_depth: int = -1,
         learning_rate: float = 0.1,
         num_iterations: int = 50,
-        objective: str = "regression",
-        metric: str = "rmse",
+        objective: str = "lambdarank",
+        metric: str = "ndcg",
         feature_fraction: float = 0.8,
         bagging_fraction: float = 0.8,
         bagging_freq: int = 5,
@@ -43,7 +43,8 @@ class LightGBMRecommender:
     def prepare_features(
         self,
         df: DataFrame,
-        label_col: str = "rating"
+        label_col: str = "rating",
+        include_user_id: bool = False
     ) -> DataFrame:
         
         from pyspark.ml.linalg import DenseVector, SparseVector
@@ -81,6 +82,8 @@ class LightGBMRecommender:
         
         df_features = assembler.transform(df_with_arrays)
         
+        if include_user_id:
+            return df_features.select("user_id", "features", label_col)
         return df_features.select("features", label_col)
     
     def train(self, train_df: DataFrame, label_col: str = "rating"):
@@ -90,9 +93,12 @@ class LightGBMRecommender:
         import numpy as np
         from pyspark.ml.linalg import DenseVector, SparseVector
         
-        train_features = self.prepare_features(train_df, label_col)
+        # For LambdaRank, we need user_id to create query groups
+        train_features = self.prepare_features(train_df, label_col, include_user_id=True)
         
-        train_pd = train_features.select("features", label_col).toPandas()
+        # Sort by user_id to create proper query groups
+        train_features_sorted = train_features.orderBy("user_id")
+        train_pd = train_features_sorted.select("user_id", "features", label_col).toPandas()
         
         def convert_vector(v):
             if isinstance(v, (DenseVector, SparseVector)):
@@ -105,6 +111,9 @@ class LightGBMRecommender:
         X_train = pd.DataFrame([convert_vector(v) for v in train_pd['features']]).astype(np.float64)
         y_train = train_pd[label_col].astype(np.float64)
         
+        # Create query groups for LambdaRank (number of items per user)
+        query_groups = train_pd.groupby('user_id').size().values
+        
         params = {
             'objective': self.objective,
             'metric': self.metric,
@@ -116,10 +125,12 @@ class LightGBMRecommender:
             'bagging_fraction': self.bagging_fraction,
             'bagging_freq': self.bagging_freq,
             'min_data_in_leaf': self.min_data_in_leaf,
-            'verbose': -1
+            'verbose': -1,
+            'ndcg_eval_at': [5, 10, 20]  # Evaluate NDCG at these positions
         }
         
-        train_data = lgb.Dataset(X_train, label=y_train)
+        # Create Dataset with query groups for ranking
+        train_data = lgb.Dataset(X_train, label=y_train, group=query_groups)
         
         self.model = lgb.train(
             params,
