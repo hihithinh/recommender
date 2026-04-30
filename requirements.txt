@@ -8,5 +8,5 @@ fastparquet==2023.10.1
 matplotlib==3.8.2
 seaborn==0.13.0
 jupyter==1.0.0
-jupyterlab==4.0.9
+jupyterlab==4.5.7
 notebook==7.0.6
